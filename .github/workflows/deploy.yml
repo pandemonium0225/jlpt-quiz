@@ -27,6 +27,16 @@ jobs:
         with:
           python-version: '3.12'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test quiz parsing and generation
+        run: python -m unittest discover -s tests -v
+
+      - name: Test quiz selection and rendering helpers
+        run: node --test tests/test_ui.cjs
+
       - name: Generate quiz bank from Notion
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}

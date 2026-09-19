@@ -49,7 +49,10 @@ h1{font-family:"Zen Old Mincho",serif;font-weight:700;
 .q-head{display:flex;align-items:baseline;gap:.7rem;margin-bottom:.9rem}
 .q-num{font-family:"Zen Old Mincho",serif;font-size:1.05rem;font-weight:700;color:var(--indigo);flex:none}
 .q-type{font-size:.78rem;color:var(--ink-soft);border:1px solid var(--rule);border-radius:2px;padding:.05rem .45rem}
-.stem{font-family:"Zen Old Mincho",serif;font-size:1.06rem;line-height:2;margin:0 0 .5rem}
+.instruction{font-size:.9rem;color:var(--ink-soft);margin:0 0 .8rem}
+.stem{font-family:"Zen Old Mincho",serif;font-size:1.15rem;line-height:2.5;margin:0 0 1rem;white-space:pre-wrap;overflow-wrap:anywhere}
+rt{font-family:"Noto Sans TC",sans-serif;font-size:.58em;font-weight:400}
+.blank{display:inline-block;min-width:4em;text-align:center;color:var(--indigo);background:var(--indigo-soft);border-bottom:2px solid var(--indigo);line-height:1.5;margin:0 .15em}
 .stem .quoted{display:block;margin-top:.5rem;padding-left:.8rem;border-left:3px solid var(--indigo)}
 .hint{margin:0 0 1rem;padding-left:.8rem;border-left:3px solid var(--rule);
   color:var(--ink-soft);font-size:.9rem;line-height:1.8}
@@ -65,8 +68,8 @@ h1{font-family:"Zen Old Mincho",serif;font-weight:700;
 .graded .opt{cursor:default}
 .graded .opt:hover{border-color:var(--rule)}
 .graded .opt.picked{background:transparent;border-color:var(--rule)}
-.opt.right{background:var(--moss-soft);border-color:var(--moss)}
-.opt.wrong{background:var(--clay-soft);border-color:var(--clay)}
+.graded .opt.right{background:var(--moss-soft);border-color:var(--moss)}
+.graded .opt.wrong{background:var(--clay-soft);border-color:var(--clay)}
 .mark{margin-left:auto;font-weight:700;font-size:.82rem;flex:none;padding-top:.2rem;
   font-family:"Noto Sans TC",sans-serif}
 .opt.right .mark{color:var(--moss)}
@@ -74,7 +77,8 @@ h1{font-family:"Zen Old Mincho",serif;font-weight:700;
 .exp{margin-top:1rem;padding-top:.9rem;border-top:1px dashed var(--rule);font-size:.92rem;display:none}
 .graded .exp{display:block}
 .exp h3{font-size:.9rem;margin:0 0 .4rem;color:var(--indigo);font-weight:700}
-.exp p{margin:0}
+.exp p{margin:.5rem 0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:2.2}
+.exp a{color:var(--indigo)}
 
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);
   border-top:1px solid var(--rule);box-shadow:0 -2px 12px var(--shadow);padding:.85rem 1.25rem}
@@ -101,7 +105,8 @@ button:focus-visible{outline:2px solid var(--indigo);outline-offset:2px}
 <body>
 <div class="wrap">
   <header class="masthead">
-    <h1>語彙（ごい）・文法（ぶんぽう）テスト</h1>
+    <h1>日文筆記・語彙與文法練習</h1>
+    <p class="meta">依 Notion 原句複習；翻譯與筆記來源於計分後顯示。每天同步，也可透過 GitHub Actions 手動重建。</p>
     <p class="meta" id="meta">読み込み中…</p>
   </header>
   <div class="score" id="score" role="status">
@@ -114,7 +119,7 @@ button:focus-visible{outline:2px solid var(--indigo);outline-offset:2px}
 <div class="bar">
   <div class="bar-in">
     <span class="count" id="count">—</span>
-    <button id="again" type="button">換一組題目</button>
+    <button id="again" type="button" disabled>換一組題目</button>
     <button id="grade" type="button" disabled>計分</button>
   </div>
 </div>
@@ -126,6 +131,26 @@ let BANK = [], current = [], graded = false;
 const $ = id => document.getElementById(id);
 const quiz = $('quiz'), gradeBtn = $('grade'), againBtn = $('again');
 
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function japanese(value){
+  // 先跳脫筆記內容，只有本地產生的 ruby／空格標籤可以成為 HTML。
+  return escapeHtml(value)
+    .replace(/([一-龯々〆ヶ]+)[（(]([ぁ-んァ-ヴー・\s]+)[）)]/g,
+      '<ruby>$1<rp>（</rp><rt>$2</rt><rp>）</rp></ruby>')
+    .replaceAll('［　］', '<span class="blank" aria-label="空格">［　］</span>');
+}
+
+function validQuestion(q){
+  return q && ['vocab','grammar','connect'].includes(q.kind)
+    && typeof q.stem === 'string' && q.stem.trim()
+    && typeof q.answer === 'string' && q.answer.trim()
+    && Array.isArray(q.pool) && q.pool.every(p => typeof p === 'string')
+    && new Set(q.pool.filter(p => p.trim() && p !== q.answer)).size >= 3;
+}
+
 function shuffle(a){
   const r = a.slice();
   for(let i = r.length - 1; i > 0; i--){
@@ -136,9 +161,23 @@ function shuffle(a){
 }
 
 function draw(){
-  const picked = shuffle(BANK).slice(0, PER_ROUND);
-  return picked.map(q => {
-    const distractors = shuffle(q.pool).slice(0, 3);
+  // 各題型輪流抽取；同一原句一輪只出一次，避免互相洩漏答案。
+  const groups = shuffle(['vocab', 'grammar', 'connect']).map(kind => shuffle(BANK.filter(q => q.kind === kind)));
+  const picked = [], used = new Set();
+  while(picked.length < PER_ROUND && groups.some(g => g.length)){
+    for(const group of groups){
+      while(group.length && picked.length < PER_ROUND){
+        const q = group.pop();
+        const key = (q.original || q.stem).replace(/（[ぁ-んァ-ヴー・\s]+）/g, '').replace(/\s/g, '');
+        if(used.has(key)) continue;
+        used.add(key);
+        picked.push(q);
+        break;
+      }
+    }
+  }
+  return shuffle(picked).map(q => {
+    const distractors = shuffle([...new Set(q.pool.filter(p => p.trim() && p !== q.answer))]).slice(0, 3);
     const opts = shuffle([q.answer].concat(distractors));
     return {...q, opts, ans: opts.indexOf(q.answer)};
   });
@@ -154,19 +193,27 @@ function render(){
     sec.innerHTML = `
       <div class="q-head">
         <span class="q-num">問題 ${i + 1}</span>
-        <span class="q-type">${q.label}</span>
+        <span class="q-type">${escapeHtml(q.label)}</span>
       </div>
-      <p class="stem">${q.stem}</p>
-      ${q.hint ? `<p class="hint">📝 ${q.hint}</p>` : ''}
+      <p class="instruction">${escapeHtml(q.instruction)}</p>
+      <p class="stem" lang="ja">${japanese(q.stem)}</p>
       <ul class="opts">
         ${q.opts.map((o, j) => `
           <li><label class="opt" data-j="${j}">
             <input type="radio" name="q${i}" value="${j}">
-            <span>${j + 1}　${o}</span>
+            <span lang="ja">${j + 1}　${japanese(o)}</span>
             <span class="mark"></span>
           </label></li>`).join('')}
       </ul>
-      <div class="exp"><h3>解答：${q.ans + 1}</h3><p>${q.note}</p></div>`;
+      <div class="exp">
+        <h3>解答：${q.ans + 1}　${japanese(q.answer)}</h3>
+        ${q.original ? `<p lang="ja">${q.punctuation_restored ? '補標點後的例句' : '原句'}：${japanese(q.original)}</p>` : ''}
+        ${q.punctuation_restored && q.source_text ? `<details><summary>查看 Notion 原始段落（標點由程式補齊）</summary><p lang="ja">${escapeHtml(q.source_text)}</p></details>` : ''}
+        ${q.translation ? `<p>筆記翻譯：${escapeHtml(q.translation)}</p>` : ''}
+        ${q.note ? `<p>${japanese(q.note)}</p>` : ''}
+        ${q.source ? `<p>筆記來源：${escapeHtml(q.source)}</p>` : ''}
+        ${/^https:\/\/www\.notion\.so\/[a-f0-9]{32}(#[a-f0-9]{32})?$/.test(q.source_url || '') ? `<a href="${escapeHtml(q.source_url)}" target="_blank" rel="noopener noreferrer">開啟 Notion 筆記</a>` : ''}
+      </div>`;
     quiz.appendChild(sec);
   });
   $('scoreTotal').textContent = current.length;
@@ -237,20 +284,20 @@ fetch('quiz.json?v=' + Date.now())
     return r.json();
   })
   .then(data => {
-    BANK = data.questions || [];
-    const s = data.stats || {};
+    BANK = (Array.isArray(data.questions) ? data.questions : []).filter(validQuestion);
     $('meta').textContent =
-      `題庫 ${s.questions} 題（文法 ${s.grammar_points} 則、標記詞 ${s.marked_terms} 個）｜更新於 ${data.generated_at}`;
+      `題庫 ${BANK.length} 題（語彙 ${BANK.filter(q => q.kind === 'vocab').length}／文法 ${BANK.filter(q => q.kind === 'grammar').length}／接續 ${BANK.filter(q => q.kind === 'connect').length}）｜同步於 ${data.generated_at}（台灣時間）`;
     if(!BANK.length){
-      quiz.innerHTML = '<p class="state">題庫是空的。請確認 Notion 頁面已分享給 integration。</p>';
+      quiz.innerHTML = '<p class="state">目前沒有可用題目。請確認 Notion 分享權限、筆記格式，以及是否有足夠的同類選項，再重建題庫。</p>';
       return;
     }
     current = draw();
     render();
+    againBtn.disabled = false;
   })
   .catch(err => {
     $('meta').textContent = '題庫讀取失敗';
-    quiz.innerHTML = `<p class="state">讀不到 quiz.json（${err.message}）。請檢查 GitHub Actions 是否執行成功。</p>`;
+    quiz.innerHTML = `<p class="state">讀不到 quiz.json（${escapeHtml(err.message)}）。請檢查 GitHub Actions 是否執行成功。</p>`;
   });
 </script>
 </body>
