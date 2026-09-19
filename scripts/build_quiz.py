@@ -306,6 +306,39 @@ def collect_grammar(page_id):
 # --------------------------------------------------------------------------
 # 出題
 # --------------------------------------------------------------------------
+def derive_keys(title):
+    """從文法點標題推出句中會出現的關鍵字，例如「格助詞　から（起点）」→ ['から']。"""
+    t = re.sub(r"（[^）]*）", "", title)
+    m = re.search(r"「〜?([^」]+)」", t)
+    if m:
+        return [m.group(1)]
+    if "　" in t:
+        t = t.split("　", 1)[1]
+    keys = []
+    for part in re.split(r"／| vs ", t):
+        part = part.strip().lstrip("〜")
+        if "＋" in part:
+            part = part.split("＋")[-1]
+        if part:
+            keys.append(part)
+    return keys
+
+
+def category(title):
+    return title.split("　")[0] if "　" in title else None
+
+
+def blank_sentence(sent, keys):
+    """在句中挖掉關鍵字；關鍵字出現次數不是剛好一次就放棄，避免挖錯位置。
+    比對時先把注音遮掉，才不會誤中讀音裡的假名。"""
+    masked = FURIGANA.sub(lambda m: "\0" * len(m.group()), sent)
+    hits = [(m.start(), k) for k in keys for m in re.finditer(re.escape(k), masked)]
+    if len(hits) != 1:
+        return None
+    i, k = hits[0]
+    return sent[:i] + "（　）" + sent[i + len(k):], k
+
+
 def build_questions(vocab, grammar):
     qs = []
 
@@ -335,22 +368,43 @@ def build_questions(vocab, grammar):
             "note": "出自〈%s〉，原句為「%s」。" % (v["source"], v["sentence"]),
         })
 
-    # --- 文法辨識 ---
-    titles = [g["title"] for g in grammar]
+    # --- 文法形式の判断（挖空填入）---
+    blanks = []  # (文法點, 挖空後的句子, 正解, 原句, 中譯)
     for g in grammar:
-        others = [t for t in titles if t != g["title"]]
-        if len(others) < 3:
+        keys = derive_keys(g["title"])
+        for jp, zh in g["examples"]:
+            hit = blank_sentence(jp, keys)
+            if hit:
+                blanks.append((g, hit[0], hit[1], jp, zh))
+
+    # 挖空後句子完全相同、正解卻不同（と／や、から／より 的對照例句），空格有兩個正解，整組捨棄
+    answers_by_stem = {}
+    for _g, stem, ans, _jp, _zh in blanks:
+        answers_by_stem.setdefault(stem, set()).add(ans)
+    blanks = [b for b in blanks if len(answers_by_stem[b[1]]) == 1]
+
+    # 只有實際成功挖過空的關鍵字才可當誘答（避免「名詞」這類從標題誤推的字）
+    proven = {}
+    for g, _s, ans, _jp, _zh in blanks:
+        proven.setdefault(id(g), set()).add(ans)
+
+    for g, stem, ans, jp, zh in blanks:
+        cat = category(g["title"])
+        # 同類別的誘答（格助詞 vs 格助詞）；沒有類別的文法點只和沒有類別的互為誘答
+        peers = [h for h in grammar if h is not g and id(h) in proven and category(h["title"]) == cat]
+        pool = list(proven[id(g)] - {ans}) + [k for h in peers for k in sorted(proven[id(h)])]
+        pool = list(dict.fromkeys(k for k in pool if k != ans))
+        if len(pool) < 3:
             continue
-        for jp, zh in g["examples"][:2]:
-            qs.append({
-                "kind": "grammar",
-                "label": "文法",
-                "stem": "次（つぎ）の文（ぶん）で使（つか）われている文法（ぶんぽう）はどれですか。<br><span class=\"quoted\">%s</span>" % jp,
-                "hint": zh,
-                "answer": g["title"],
-                "pool": others,
-                "note": "這句示範的是「%s」。" % g["title"],
-            })
+        qs.append({
+            "kind": "grammar",
+            "label": "文法",
+            "stem": "次（つぎ）の文（ぶん）の（　）に入（はい）れるのに最（もっと）もよいものはどれですか。<br><span class=\"quoted\">%s</span>" % stem,
+            "hint": zh,
+            "answer": ans,
+            "pool": pool,
+            "note": "正解是「%s」，文法點：「%s」。原句為「%s」" % (ans, g["title"], jp),
+        })
 
     # --- 接續方式 ---
     for g in grammar:
