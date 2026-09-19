@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+*.token
+.DS_Store
+site/quiz.json
