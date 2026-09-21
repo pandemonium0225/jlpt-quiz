@@ -401,10 +401,12 @@ fetch('quiz.json?v=' + Date.now())
   })
   .then(data => {
     BANK = (Array.isArray(data.questions) ? data.questions : []).filter(validQuestion);
+    // 題型名稱跟著題庫走：同一個 kind 底下有「用法」與「活用」兩種標籤。
+    const counts = new Map();
+    BANK.forEach(q => counts.set(q.label, (counts.get(q.label) ?? 0) + 1));
+    const breakdown = [...counts].map(([label, n]) => `${label} ${n}`).join('、');
     $('meta').textContent =
-      `題庫 ${BANK.length} 題（語彙 ${BANK.filter(q => q.kind === 'vocab').length}、`
-      + `文法 ${BANK.filter(q => q.kind === 'grammar').length}、`
-      + `接續 ${BANK.filter(q => q.kind === 'connect').length}），`
+      `題庫 ${BANK.length} 題（${breakdown}），`
       + `同步於 ${data.generated_at} 台灣時間。內容取自 Notion 筆記，每天重建一次。`;
     if(!BANK.length){
       quiz.innerHTML = '<p class="state">題庫是空的。檢查 Notion 分享權限與筆記格式，確認同類選項夠湊滿四個，再重建一次。</p>';
