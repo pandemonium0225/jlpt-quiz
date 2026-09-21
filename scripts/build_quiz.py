@@ -501,6 +501,206 @@ def grammar_family(entry):
     return entry["title"]
 
 
+# 接續欄的語意角色標籤，例如「名詞（起点・きてん）＋を＋移動動詞」→「起点」。
+# 帶注音時只留漢字部分；純假名括號是注音，不是標籤。
+ROLE_LABEL = re.compile(r"（([^（）]*[一-龯][^（）]*?)(?:・[ぁ-んァ-ヴー]+)?）")
+# 括號開頭標了對照、別用法的列不是這個文法點的用法，拿來出題會說錯
+ROLE_SKIP = re.compile(r"^[（(]\s*(対比|別用法|比較|参考)")
+# 詞類名描述的是接續形式而非語意，當選項無法辨別用法
+ROLE_POS = re.compile(r"^(名詞[A-Za-z]?|動詞|普通形|辞書形|可能形|数量詞?|固定数量|職業名詞"
+                      r"|[なでいくた]?形容詞\w*|動詞\w*形|副詞|あまり|かなり)$")
+
+
+def usage_role(rule):
+    """接續欄描述的語意角色；描述的是接續形式而非語意時回 None。"""
+    if ROLE_SKIP.search(rule):
+        return None
+    text = normalize_text(rule)
+    tags = [t.strip() for t in ROLE_LABEL.findall(text) if t.strip()]
+    tags = [t for t in tags if not ROLE_POS.match(t)]
+    if tags:
+        return tags[-1]
+    head = FURIGANA.sub("", text).split("＋")[0].strip()
+    if not head or ROLE_POS.match(head) or re.search(r"[ぁ-ん]$", head):
+        return None      # 「場所に」帶著助詞，描述的是句型不是角色
+    return head
+
+
+def usage_rows(entry):
+    """該文法點可用於用法辨識的列；同一則裡撞名的整組排除，因為無法分辨。"""
+    rows = [(usage_role(rule), ex) for rule, ex in entry["rules"]]
+    rows = [(role, ex) for role, ex in rows if role and ex]
+    counts = {}
+    for role, _ in rows:
+        counts[role] = counts.get(role, 0) + 1
+    return [(role, ex) for role, ex in rows if counts[role] == 1]
+
+
+# 斷詞器是選配：沒裝就不出需要切詞的活用題，其餘題型不受影響。
+# 純字典查表分不出「切る」（五段）與「見る」（一段），會生出「見らない」這種錯字。
+try:
+    import fugashi
+    TAGGER = fugashi.Tagger()
+except Exception:
+    TAGGER = None
+
+# 五段行別 →（て形語尾, た形語尾, 連用形母音, 未然形母音）
+GODAN = {
+    "カ": ("いて", "いた", "き", "か"), "ガ": ("いで", "いだ", "ぎ", "が"),
+    "サ": ("して", "した", "し", "さ"),  "タ": ("って", "った", "ち", "た"),
+    "ナ": ("んで", "んだ", "に", "な"),  "バ": ("んで", "んだ", "び", "ば"),
+    "マ": ("んで", "んだ", "み", "ま"),  "ラ": ("って", "った", "り", "ら"),
+    "ワア": ("って", "った", "い", "わ"),
+}
+
+
+def verb_forms(dictionary, ctype):
+    """活用型已知時變化是確定的。認不得的活用型回空字典，不猜。"""
+    if ctype.startswith("五段"):
+        row = ctype.split("-")[1].replace("行", "")
+        if row not in GODAN or len(dictionary) < 2:
+            return {}
+        te, ta, i, a = GODAN[row]
+        if dictionary == "行く":                    # 唯一的音便例外
+            te, ta = "って", "った"
+        stem = dictionary[:-1]
+        return {"辞書形": dictionary, "て形": stem + te, "た形": stem + ta,
+                "ます形": stem + i, "ない形": stem + a + "ない"}
+    if ctype.startswith(("上一段", "下一段")) and len(dictionary) >= 2:
+        stem = dictionary[:-1]
+        return {"辞書形": dictionary, "て形": stem + "て", "た形": stem + "た",
+                "ます形": stem, "ない形": stem + "ない"}
+    if ctype.startswith("サ行変格") and dictionary.endswith("する"):
+        stem = dictionary[:-2]
+        return {"辞書形": dictionary, "て形": stem + "して", "た形": stem + "した",
+                "ます形": stem + "し", "ない形": stem + "しない"}
+    if ctype.startswith("カ行変格"):
+        return {"辞書形": "来る", "て形": "来て", "た形": "来た",
+                "ます形": "来", "ない形": "来ない"}
+    return {}
+
+
+def verb_chunks(text):
+    """切出動詞片段：動詞 token 加上緊跟的助動詞（ない／た／て）。
+    回傳 [(起, 迄, 表記, 辞書形, 活用型, 形名)]。"""
+    words = list(TAGGER(text))
+    spans, pos = [], 0
+    for w in words:
+        spans.append((pos, pos + len(w.surface)))
+        pos += len(w.surface)
+    out = []
+    for i, w in enumerate(words):
+        f = w.feature
+        if f.pos1 != "動詞" or getattr(f, "cType", "*") == "*":
+            continue
+        # orthBase 是這個詞自己的辞書形；lemma 會正規化（帰る→返る）也會還原可能形
+        dictionary = getattr(f, "orthBase", None) or f.lemma
+        start = spans[i][0]
+        if dictionary == "する" and i and words[i - 1].feature.pos1 == "名詞":
+            # 名詞＋する 是一個複合動詞：「勉強すれば」不能掉成「すれば」
+            noun = getattr(words[i - 1].feature, "orthBase", None) or words[i - 1].surface
+            dictionary, start = noun + "する", spans[i - 1][0]
+        end, form = spans[i][1], None
+        cform = getattr(f, "cForm", "") or ""
+        if cform.startswith(("終止形", "連体形")):
+            form = "辞書形"
+        elif cform.startswith("連用形"):
+            form = "て形"
+        for j in range(i + 1, len(words)):
+            nf = words[j].feature
+            if nf.pos1 not in ("助動詞", "助詞") or nf.pos1 == "助詞" and words[j].surface not in ("て", "で"):
+                break
+            base = getattr(nf, "orthBase", None) or nf.lemma
+            if base in ("ない", "ぬ"):
+                form, end = "ない形", spans[j][1]
+            elif base == "た":
+                form, end = "た形", spans[j][1]
+            elif words[j].surface in ("て", "で"):
+                form, end = "て形", spans[j][1]
+            else:
+                break
+        if form:
+            out.append((start, end, text[start:end], dictionary, f.cType, form))
+    return out
+
+
+# 接續欄第一段描述要考的形。「可能形」本身已是辞書形（話せる）。
+# 肯定與否定填進同一個空格往往都成立，只是語意相反，不併入同一組選項。
+OPPOSITE = {"辞書形": "ない形", "ない形": "辞書形"}
+# 「〜ように」前面接普通形，三種形填進去都成立：「忘れないように」是為了不忘，
+# 「忘れたように」是裝作忘了。語意不同但都合法，所以彼此不當誘答。
+PLAIN_FORMS = {"辞書形", "ない形", "た形"}
+PLAIN_FORM_TAILS = {"ように"}
+
+FORM_ALIAS = {"動詞辞書形": "辞書形", "辞書形": "辞書形", "可能形": "辞書形",
+              "動詞た形": "た形", "た形": "た形", "動詞ない形": "ない形",
+              "ない形": "ない形", "動詞て形": "て形", "て形": "て形"}
+
+
+def furigana_prefix(text, count):
+    """取 text 裡對應「去注音後前 count 個字」的片段，該字的注音一起帶走。"""
+    readings = list(FURIGANA.finditer(text))
+    hidden = {i for m in readings for i in range(m.start(), m.end())}
+    plain = [i for i in range(len(text)) if i not in hidden]
+    if count <= 0:
+        return ""
+    if count >= len(plain):
+        return text
+    end = plain[count - 1] + 1
+    for reading in readings:
+        if reading.start() == end:
+            end = reading.end()
+    return text[:end]
+
+
+def conjugation_target(rule, example):
+    """依接續欄在例句裡定位要挖的動詞片段；不是剛好一個就放棄。"""
+    if not TAGGER:
+        return None
+    parts = [p.strip() for p in surface(rule).split("＋") if p.strip()]
+    if len(parts) < 2:
+        return None
+    want = FORM_ALIAS.get(parts[0])
+    if not want:
+        return None
+    tail, text, hits = parts[1], surface(example), []
+    for _, end, chunk, dictionary, ctype, form in verb_chunks(text):
+        if form != want:
+            continue
+        rest = text[end:]
+        if tail in ("名詞", "動詞", "形容詞", "副詞"):
+            following = next(iter(TAGGER(rest)), None)
+            matched = following is not None and following.feature.pos1 == tail
+        else:
+            matched = bool(rest) and rest.startswith(tail.split("／")[0])
+        if matched:
+            hits.append((chunk, dictionary, ctype))
+    return hits[0] if len(hits) == 1 else None
+
+
+# 接續表的例欄有時寫成「静かだ → 静かで」，原形與變化形都給了。
+ARROW = re.compile(r"\s*[→⇒]\s*")
+
+
+def inflection_pair(example):
+    """例欄是「原形 → 變化形」時回傳這一組，否則 None。"""
+    parts = ARROW.split(normalize_text(example))
+    if len(parts) != 2:
+        return None
+    base, inflected = parts[0].strip(), parts[1].strip()
+    if not base or not inflected or base == inflected:
+        return None
+    return base, inflected
+
+
+def common_prefix(a, b):
+    """語幹＝原形與變化形的共同前綴。注音在兩邊相同，直接比對即可。"""
+    i = 0
+    while i < min(len(a), len(b)) and a[i] == b[i]:
+        i += 1
+    return a[:i]
+
+
 def blank_sentence(sent, keys):
     """在句中挖掉關鍵字；關鍵字出現次數不是剛好一次就放棄，避免挖錯位置。
     比對時先把注音遮掉，才不會誤中讀音裡的假名。"""
@@ -585,13 +785,13 @@ def build_questions(vocab, grammar):
     qs = []
     instruction = "依 Notion 筆記的原句，選出填入［　］的內容。"
 
-    def add(kind, label, stem, answer, pool, source, original, translation="", note="", source_url="", source_text=""):
+    def add(kind, label, stem, answer, pool, source, original, translation="", note="",
+            source_url="", source_text="", ask=""):
         pool = unique_options(pool, answer)
         if len(pool) < 3 or not balanced(stem):
             return
         qs.append({
-            "kind": kind, "label": label, "instruction": instruction if kind != "connect" else
-            "依 Notion 接續表，選出下列例子對應的接續形式。",
+            "kind": kind, "label": label, "instruction": ask or instruction,
             "stem": stem, "hint": "", "answer": answer, "pool": pool[:8],
             "source": source, "source_url": source_url,
             "original": original, "translation": translation, "note": note,
@@ -652,25 +852,109 @@ def build_questions(vocab, grammar):
             "文法點：" + g["title"] + "\n答案依據筆記原句，不代表其他表達在所有語境下都錯誤。",
             g.get("source_url", ""), g.get("source_texts", {}).get(jp, ""))
 
-    # --- 接續方式 ---
+    # --- 用法辨識 ---
+    # 問「這個助詞在這句表示什麼」，而不是「這個例子對應接續表的哪一列」：
+    # 後者考的是記不記得筆記的措辭，而且同一個例子常符合多個接續描述，答案不唯一。
+    usable = {id(g): usage_rows(g) for g in grammar}
     for g in grammar:
-        # 誘答只取「其他文法點」的接續；同一文法點的其他接續也是正解，不能當誘答
-        own = {surface(r) for r, _ in g["rules"]}
-        others = []
-        for h in grammar:
-            if h is g:
+        rows = usable[id(g)]
+        if len(rows) < 2:
+            continue
+        cat = category(g["title"])
+        keys = derive_keys(g["title"])
+        ask = (f"下面句子裡的「{keys[0]}」表示什麼？" if cat and len(keys) == 1
+               else "下面的例子屬於哪一種用法？")
+        own = {surface(role) for role, _ in rows}
+        # 誘答先用同一則的其他用法（最容易混淆），再借同類別文法點的用法。
+        borrowed = []
+        if cat:
+            for h in grammar:
+                if h is g or category(h["title"]) != cat:
+                    continue
+                borrowed += [role for role, _ in usable[id(h)] if surface(role) not in own]
+        for role, ex in rows:
+            # 同一個例子在別處對應不同用法時，沒有唯一可核對的答案。
+            elsewhere = {surface(r) for h in grammar for r, e in usable[id(h)]
+                         if surface(e) == surface(ex)}
+            if len(elsewhere) != 1:
                 continue
-            others += [r for r, _ in h["rules"] if surface(r) not in own and r not in others]
+            # 同一個助詞的其他用法才是真正會混淆的誘答；不足三個才向外借。
+            pool = [r for r, _ in rows if r != role]
+            if len(pool) < 3:
+                # 借來的角色若與正解互相包含（起点／起点・書面語），兩個都算對。
+                # 標題已標明的用法也是這個助詞的正解：【格助詞　から（起点・口語）】
+                # 底下的「9時から始まる」確實是起点，不能拿「起点」當錯誤選項。
+                safe = [r for r in borrowed
+                        if surface(r) not in surface(role) and surface(role) not in surface(r)
+                        and surface(r) not in surface(g["title"])]
+                pool += safe[:3 - len(pool)]
+            add("connect", "用法", ex, role, pool, g["title"], ex, ask=ask,
+                note="筆記記載的接續：" + next(r for r, e in g["rules"] if e == ex),
+                source_url=g.get("source_url", ""))
 
+    # --- 活用形：例欄已寫成「原形 → 變化形」的列 ---
+    # 誘答是把同一則其他列的語尾套錯在這個詞上（静か＋くて），
+    # 正是學習者真的會犯的錯；再加上原形本身（忘了變形）。
+    for g in grammar:
+        pairs = []
         for rule, ex in g["rules"]:
-            # 相同例子對應不同規則時，沒有唯一可核對的答案。
-            matches = {surface(r) for h in grammar for r, example in h["rules"]
-                       if surface(example) == surface(ex)}
-            if len(matches) != 1 or not ex:
+            pair = inflection_pair(ex)
+            if not pair or usage_role(rule):
                 continue
-            ranked = sorted(others, key=lambda r: (surface(r).split("＋")[0] != surface(rule).split("＋")[0],
-                                                   abs(len(surface(r)) - len(surface(rule)))))
-            add("connect", "接續", ex, rule, ranked, g["title"], ex,
+            base, inflected = pair
+            stem = common_prefix(base, inflected)
+            if not stem or stem == inflected:
+                continue
+            pairs.append((base, inflected, stem, inflected[len(stem):], rule))
+        if len(pairs) < 2:
+            continue
+        endings = {surface(e) for _, _, _, e, _ in pairs}
+        for base, inflected, stem, ending, rule in pairs:
+            wrong = [stem + e for _, _, _, e, _ in pairs if surface(e) != surface(ending)]
+            wrong.append(base)                       # 忘了變形，直接接原形
+            add("connect", "活用", base + " → " + BLANK, inflected, wrong,
+                g["title"], base + " → " + inflected,
+                ask="選出這個詞接在後句時的正確形式。",
+                note="筆記記載的接續：" + rule, source_url=g.get("source_url", ""))
+
+    # --- 活用形：從例句切出動詞挖空（需要斷詞器，沒裝就整段跳過）---
+    for g in grammar:
+        for rule, ex in g["rules"]:
+            if usage_role(rule) or inflection_pair(ex):
+                continue
+            hit = conjugation_target(rule, ex)
+            if not hit:
+                continue
+            chunk, dictionary, ctype = hit
+            tail = surface(rule).split("＋")[1].strip() if "＋" in rule else ""
+            forms = verb_forms(dictionary, ctype)
+            blanked = blank_sentence(ex, [chunk]) if forms else None
+            if not blanked:
+                continue
+            stem, answer = blanked
+            # 同一則列出的其他形也是這個文法點接受的接續：【動詞辞書形＋名詞】
+            # 底下就列了た形，「よく使った言葉」是對的，不能當錯誤選項。
+            accepted = {FORM_ALIAS.get(surface(r).split("＋")[0].strip()) for r, _ in g["rules"]}
+            accepted.discard(None)
+            # 否定與肯定填進同一個空格往往都成立，只是語意相反：
+            # 「よく使う言葉」與「よく使わない言葉」都是對的。作答時看不到文法點
+            # （標題就是答案），學習者沒有線索排除，所以兩者不互當誘答。
+            # 與「常見可互換助詞不互當誘答」是同一個原則。
+            answer_form = next((n for n, t in forms.items()
+                                if surface(t) == surface(answer)), None)
+            # 誘答是同一個動詞的其他形；語尾換掉，注音跟著語幹留下。
+            options = []
+            for name, text in forms.items():
+                if surface(text) == surface(answer) or name in accepted:
+                    continue
+                if OPPOSITE.get(answer_form) == name:
+                    continue
+                if tail in PLAIN_FORM_TAILS and {name, answer_form} <= PLAIN_FORMS:
+                    continue
+                keep = len(common_prefix(surface(answer), text))
+                options.append(furigana_prefix(answer, keep) + text[keep:])
+            add("connect", "活用", stem, answer, options, g["title"], ex,
+                ask="選出填入［　］的正確形式。",
                 note="筆記記載的接續：" + rule, source_url=g.get("source_url", ""))
 
     # 內容修改、刪除由每次全量重建反映；穩定 ID 不依賴日期或抽題順序。

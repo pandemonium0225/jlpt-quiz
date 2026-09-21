@@ -26,6 +26,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
+
+      # 活用題要切詞與判斷五段／一段，純 stdlib 做不到。
+      # 生成器仍是 try-import，沒裝只是少出活用題。
+      - name: Install Japanese tokenizer
+        run: pip install -r requirements.txt
 
       - uses: actions/setup-node@v4
         with:
