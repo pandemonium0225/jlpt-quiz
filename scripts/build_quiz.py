@@ -625,6 +625,13 @@ def verb_chunks(text):
 
 
 # 接續欄第一段描述要考的形。「可能形」本身已是辞書形（話せる）。
+# 肯定與否定填進同一個空格往往都成立，只是語意相反，不併入同一組選項。
+OPPOSITE = {"辞書形": "ない形", "ない形": "辞書形"}
+# 「〜ように」前面接普通形，三種形填進去都成立：「忘れないように」是為了不忘，
+# 「忘れたように」是裝作忘了。語意不同但都合法，所以彼此不當誘答。
+PLAIN_FORMS = {"辞書形", "ない形", "た形"}
+PLAIN_FORM_TAILS = {"ように"}
+
 FORM_ALIAS = {"動詞辞書形": "辞書形", "辞書形": "辞書形", "可能形": "辞書形",
               "動詞た形": "た形", "た形": "た形", "動詞ない形": "ない形",
               "ない形": "ない形", "動詞て形": "て形", "て形": "て形"}
@@ -919,6 +926,7 @@ def build_questions(vocab, grammar):
             if not hit:
                 continue
             chunk, dictionary, ctype = hit
+            tail = surface(rule).split("＋")[1].strip() if "＋" in rule else ""
             forms = verb_forms(dictionary, ctype)
             blanked = blank_sentence(ex, [chunk]) if forms else None
             if not blanked:
@@ -928,10 +936,20 @@ def build_questions(vocab, grammar):
             # 底下就列了た形，「よく使った言葉」是對的，不能當錯誤選項。
             accepted = {FORM_ALIAS.get(surface(r).split("＋")[0].strip()) for r, _ in g["rules"]}
             accepted.discard(None)
+            # 否定與肯定填進同一個空格往往都成立，只是語意相反：
+            # 「よく使う言葉」與「よく使わない言葉」都是對的。作答時看不到文法點
+            # （標題就是答案），學習者沒有線索排除，所以兩者不互當誘答。
+            # 與「常見可互換助詞不互當誘答」是同一個原則。
+            answer_form = next((n for n, t in forms.items()
+                                if surface(t) == surface(answer)), None)
             # 誘答是同一個動詞的其他形；語尾換掉，注音跟著語幹留下。
             options = []
             for name, text in forms.items():
                 if surface(text) == surface(answer) or name in accepted:
+                    continue
+                if OPPOSITE.get(answer_form) == name:
+                    continue
+                if tail in PLAIN_FORM_TAILS and {name, answer_form} <= PLAIN_FORMS:
                     continue
                 keep = len(common_prefix(surface(answer), text))
                 options.append(furigana_prefix(answer, keep) + text[keep:])

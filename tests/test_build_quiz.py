@@ -299,7 +299,39 @@ class QuestionTests(unittest.TestCase):
         self.assertEqual(q['stem'], 'よく［　］言葉（ことば）')
         self.assertEqual(q['answer'], '使（つか）う')
         self.assertIn('使（つか）った', q['pool'])
-        self.assertIn('使（つか）わない', q['pool'])
+        self.assertIn('使（つか）い', q['pool'])
+        # 肯定的正解不與否定形同組：「よく使わない言葉」也是對的
+        self.assertNotIn('使（つか）わない', q['pool'])
+
+    @unittest.skipUnless(b.TAGGER, '未安裝斷詞器')
+    def test_conjugation_never_pairs_negative_against_affirmative(self):
+        # 「よく使う言葉」與「よく使わない言葉」都成立，只是語意相反；
+        # 作答時看不到文法點，沒有線索排除，所以這題整個不出。
+        grammar = [particle('動詞辞書形＋名詞', [
+            ['動詞（どうし）辞書形（じしょけい）＋名詞（めいし）', 'よく使（つか）う言葉（ことば）']])]
+        qs = [q for q in b.build_questions([], grammar) if q['label'] == '活用']
+        self.assertTrue(all('使（つか）わない' not in q['pool'] for q in qs))
+
+    @unittest.skipUnless(b.TAGGER, '未安裝斷詞器')
+    def test_conjugation_skips_plain_forms_before_youni(self):
+        # 「忘れないように」是為了不忘，「忘れたように」是裝作忘了：都合法，
+        # 只是語意不同。活用題不顯示文法點，沒有線索排除，所以這題整個不出。
+        grammar = [particle('〜ように（目標となる状態）', [
+            ['動詞（どうし）ない形（けい）＋ように＋動詞（どうし）', '忘（わす）れないようにメモする']])]
+        self.assertEqual([q for q in b.build_questions([], grammar) if q['label'] == '活用'], [])
+
+    @unittest.skipUnless(b.TAGGER, '未安裝斷詞器')
+    def test_conjugation_never_puts_a_form_against_its_opposite(self):
+        # 「送ってもらうといけない」也成立，只是語意相反。活用題不顯示文法點，
+        # 學習者沒有線索排除，所以肯定與否定不放進同一組選項。
+        grammar = [particle('ないといけない（義務・必須表現）', [
+            ['動詞（どうし）ない形（けい）＋と＋いけない', '送（おく）ってもらわないといけない']])]
+        q = next(q for q in b.build_questions([], grammar) if q['label'] == '活用')
+        self.assertEqual(q['answer'], 'もらわない')
+        self.assertNotIn('もらう', q['pool'])
+        # 對立的只有辞書形，其他形仍然是有效誘答
+        self.assertIn('もらって', q['pool'])
+        self.assertIn('もらった', q['pool'])
 
     @unittest.skipUnless(b.TAGGER, '未安裝斷詞器')
     def test_conjugation_never_offers_a_form_the_note_also_accepts(self):
@@ -309,11 +341,11 @@ class QuestionTests(unittest.TestCase):
             ['動詞（どうし）辞書形（じしょけい）＋名詞（めいし）', 'よく使（つか）う言葉（ことば）'],
             ['動詞（どうし）た形（けい）＋名詞（めいし）', '昨日（きのう）使（つか）った言葉（ことば）']])]
         qs = [q for q in b.build_questions([], grammar) if q['label'] == '活用']
-        self.assertEqual(len(qs), 2)
-        for q in qs:
-            self.assertNotIn('使（つか）う', [o for o in q['pool'] if o != q['answer']])
-            self.assertNotIn('使（つか）った', [o for o in q['pool'] if o != q['answer']])
-            self.assertIn('使（つか）って', q['pool'])
+        # 辞書形那題的誘答被兩條規則削光：た形是筆記也接受的形，ない形與正解對立，
+        # 剩下的不足三個，整題捨棄。留下的一題正解是た形。
+        self.assertEqual([q['answer'] for q in qs], ['使（つか）った'])
+        self.assertNotIn('使（つか）う', qs[0]['pool'])
+        self.assertIn('使（つか）って', qs[0]['pool'])
 
     def test_usage_skips_examples_that_match_more_than_one_role(self):
         grammar = [
