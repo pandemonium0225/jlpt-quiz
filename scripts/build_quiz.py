@@ -1153,6 +1153,8 @@ def main(argv=()):
             # 先用既有多解案例與正常題校驗；快取有效時不重複付費。
             if not reviewer.calibrate():
                 reviewer.run_budget = 0  # 尚未校驗完成，只記錄待審，不發新請求。
+            print("AI 校驗 %d/%d；候選 %d 題" % (reviewer.stats["calibration_passed"],
+                  reviewer.stats["calibration_total"], len(questions)), file=sys.stderr, flush=True)
             questions = reviewer.filter_questions(questions, diagnostics)
             for q in questions:
                 q["revision"] = revision(q)

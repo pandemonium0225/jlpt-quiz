@@ -5,6 +5,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import tempfile
 import time
 import urllib.error
@@ -221,7 +222,7 @@ class Reviewer:
             self.stats["month_usd"] = self.state["months"][self.month]
             save_state(self.path, self.state)
         if response.get("status") != "completed":
-            if response.get("incomplete_details", {}).get("reason") == "max_output_tokens":
+            if (response.get("incomplete_details") or {}).get("reason") == "max_output_tokens":
                 raise ValueError("AI 已達單題 %d 輸出 tokens 上限，回覆不完整；停止發布" % MAX_OUTPUT_TOKENS)
             raise ValueError("AI 回覆未完成（可能已達輸出上限），不視為通過")
         texts = [part["text"] for item in response.get("output", []) if item.get("type") == "message"
@@ -236,7 +237,13 @@ class Reviewer:
     def filter_questions(self, questions, diagnostics):
         accepted = []
         stopped = False
-        for question in questions:
+        def progress(completed):
+            print("AI 審題 %d/%d；通過 %d、排除 %d、待審 %d；本次估算 US$%.4f，本月 US$%.4f" % (
+                completed, len(questions), self.stats["accepted"], self.stats["rejected"],
+                self.stats["pending"], self.stats["run_usd"], self.stats["month_usd"]), file=sys.stderr, flush=True)
+        for index, question in enumerate(questions):
+            if index % 10 == 0:
+                progress(index)
             context = dict(source=question["source"], source_url=question["source_url"],
                            text=question["stem"], target=question["answer"])
             try:
@@ -270,4 +277,5 @@ class Reviewer:
             self.stats["accepted"] += 1
         # 無新呼叫時也輸出完整狀態供 CI 保存。
         save_state(self.path, self.state)
+        progress(len(questions))
         return accepted
