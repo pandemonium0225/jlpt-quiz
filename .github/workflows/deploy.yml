@@ -91,7 +91,6 @@ jobs:
           --baseline-info .build/baseline-info.json
           --ai-review
           --ai-no-run-limit
-          --ai-initial-month-budget 10
 
       - name: Write review summary
         if: always()
