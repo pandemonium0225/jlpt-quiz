@@ -286,12 +286,12 @@ function render(){
     </ul>
     <div class="exp">
       <h3>解答　${NO[q.ans]}　<span lang="ja">${japanese(q.answer)}</span></h3>
-      ${q.original ? `<p lang="ja"><span class="lab">${q.punctuation_restored ? '補標點後的例句' : '原句'}</span>${japanese(q.original)}</p>` : ''}
+      ${q.original && q.original !== q.stem ? `<p lang="ja"><span class="lab">${q.punctuation_restored ? '補標點後的例句' : '原句'}</span>${japanese(q.original)}</p>` : ''}
       ${q.punctuation_restored && q.source_text ? `<details><summary>查看 Notion 原始段落（標點由程式補齊）</summary><p lang="ja">${escapeHtml(q.source_text)}</p></details>` : ''}
       ${q.translation ? `<p><span class="lab">翻譯</span>${escapeHtml(q.translation)}</p>` : ''}
       ${noteLines(q).map(line =>
         `<p${/不代表|不宣稱/.test(line) ? ' class="caveat"' : ''}>${japanese(line)}</p>`).join('')}
-      ${q.source ? `<p><span class="lab">來源</span><span lang="ja">${japanese(q.source)}</span></p>` : ''}
+      ${q.source && q.kind !== 'connect' ? `<p><span class="lab">來源</span><span lang="ja">${japanese(q.source)}</span></p>` : ''}
       ${/^https:\/\/www\.notion\.so\/[a-f0-9]{32}(#[a-f0-9]{32})?$/.test(q.source_url || '') ? `<p><a href="${escapeHtml(q.source_url)}" target="_blank" rel="noopener noreferrer">開啟 Notion 筆記</a></p>` : ''}
     </div>`;
   quiz.appendChild(sec);

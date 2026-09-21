@@ -501,6 +501,41 @@ def grammar_family(entry):
     return entry["title"]
 
 
+# 接續欄的語意角色標籤，例如「名詞（起点・きてん）＋を＋移動動詞」→「起点」。
+# 帶注音時只留漢字部分；純假名括號是注音，不是標籤。
+ROLE_LABEL = re.compile(r"（([^（）]*[一-龯][^（）]*?)(?:・[ぁ-んァ-ヴー]+)?）")
+# 括號開頭標了對照、別用法的列不是這個文法點的用法，拿來出題會說錯
+ROLE_SKIP = re.compile(r"^[（(]\s*(対比|別用法|比較|参考)")
+# 詞類名描述的是接續形式而非語意，當選項無法辨別用法
+ROLE_POS = re.compile(r"^(名詞[A-Za-z]?|動詞|普通形|辞書形|可能形|数量詞?|固定数量|職業名詞"
+                      r"|[なでいくた]?形容詞\w*|動詞\w*形|副詞|あまり|かなり)$")
+
+
+def usage_role(rule):
+    """接續欄描述的語意角色；描述的是接續形式而非語意時回 None。"""
+    if ROLE_SKIP.search(rule):
+        return None
+    text = normalize_text(rule)
+    tags = [t.strip() for t in ROLE_LABEL.findall(text) if t.strip()]
+    tags = [t for t in tags if not ROLE_POS.match(t)]
+    if tags:
+        return tags[-1]
+    head = FURIGANA.sub("", text).split("＋")[0].strip()
+    if not head or ROLE_POS.match(head) or re.search(r"[ぁ-ん]$", head):
+        return None      # 「場所に」帶著助詞，描述的是句型不是角色
+    return head
+
+
+def usage_rows(entry):
+    """該文法點可用於用法辨識的列；同一則裡撞名的整組排除，因為無法分辨。"""
+    rows = [(usage_role(rule), ex) for rule, ex in entry["rules"]]
+    rows = [(role, ex) for role, ex in rows if role and ex]
+    counts = {}
+    for role, _ in rows:
+        counts[role] = counts.get(role, 0) + 1
+    return [(role, ex) for role, ex in rows if counts[role] == 1]
+
+
 def blank_sentence(sent, keys):
     """在句中挖掉關鍵字；關鍵字出現次數不是剛好一次就放棄，避免挖錯位置。
     比對時先把注音遮掉，才不會誤中讀音裡的假名。"""
@@ -585,13 +620,13 @@ def build_questions(vocab, grammar):
     qs = []
     instruction = "依 Notion 筆記的原句，選出填入［　］的內容。"
 
-    def add(kind, label, stem, answer, pool, source, original, translation="", note="", source_url="", source_text=""):
+    def add(kind, label, stem, answer, pool, source, original, translation="", note="",
+            source_url="", source_text="", ask=""):
         pool = unique_options(pool, answer)
         if len(pool) < 3 or not balanced(stem):
             return
         qs.append({
-            "kind": kind, "label": label, "instruction": instruction if kind != "connect" else
-            "依 Notion 接續表，選出下列例子對應的接續形式。",
+            "kind": kind, "label": label, "instruction": ask or instruction,
             "stem": stem, "hint": "", "answer": answer, "pool": pool[:8],
             "source": source, "source_url": source_url,
             "original": original, "translation": translation, "note": note,
@@ -652,26 +687,45 @@ def build_questions(vocab, grammar):
             "文法點：" + g["title"] + "\n答案依據筆記原句，不代表其他表達在所有語境下都錯誤。",
             g.get("source_url", ""), g.get("source_texts", {}).get(jp, ""))
 
-    # --- 接續方式 ---
+    # --- 用法辨識 ---
+    # 問「這個助詞在這句表示什麼」，而不是「這個例子對應接續表的哪一列」：
+    # 後者考的是記不記得筆記的措辭，而且同一個例子常符合多個接續描述，答案不唯一。
+    usable = {id(g): usage_rows(g) for g in grammar}
     for g in grammar:
-        # 誘答只取「其他文法點」的接續；同一文法點的其他接續也是正解，不能當誘答
-        own = {surface(r) for r, _ in g["rules"]}
-        others = []
-        for h in grammar:
-            if h is g:
+        rows = usable[id(g)]
+        if len(rows) < 2:
+            continue
+        cat = category(g["title"])
+        keys = derive_keys(g["title"])
+        ask = (f"下面句子裡的「{keys[0]}」表示什麼？" if cat and len(keys) == 1
+               else "下面的例子屬於哪一種用法？")
+        own = {surface(role) for role, _ in rows}
+        # 誘答先用同一則的其他用法（最容易混淆），再借同類別文法點的用法。
+        borrowed = []
+        if cat:
+            for h in grammar:
+                if h is g or category(h["title"]) != cat:
+                    continue
+                borrowed += [role for role, _ in usable[id(h)] if surface(role) not in own]
+        for role, ex in rows:
+            # 同一個例子在別處對應不同用法時，沒有唯一可核對的答案。
+            elsewhere = {surface(r) for h in grammar for r, e in usable[id(h)]
+                         if surface(e) == surface(ex)}
+            if len(elsewhere) != 1:
                 continue
-            others += [r for r, _ in h["rules"] if surface(r) not in own and r not in others]
-
-        for rule, ex in g["rules"]:
-            # 相同例子對應不同規則時，沒有唯一可核對的答案。
-            matches = {surface(r) for h in grammar for r, example in h["rules"]
-                       if surface(example) == surface(ex)}
-            if len(matches) != 1 or not ex:
-                continue
-            ranked = sorted(others, key=lambda r: (surface(r).split("＋")[0] != surface(rule).split("＋")[0],
-                                                   abs(len(surface(r)) - len(surface(rule)))))
-            add("connect", "接續", ex, rule, ranked, g["title"], ex,
-                note="筆記記載的接續：" + rule, source_url=g.get("source_url", ""))
+            # 同一個助詞的其他用法才是真正會混淆的誘答；不足三個才向外借。
+            pool = [r for r, _ in rows if r != role]
+            if len(pool) < 3:
+                # 借來的角色若與正解互相包含（起点／起点・書面語），兩個都算對。
+                # 標題已標明的用法也是這個助詞的正解：【格助詞　から（起点・口語）】
+                # 底下的「9時から始まる」確實是起点，不能拿「起点」當錯誤選項。
+                safe = [r for r in borrowed
+                        if surface(r) not in surface(role) and surface(role) not in surface(r)
+                        and surface(r) not in surface(g["title"])]
+                pool += safe[:3 - len(pool)]
+            add("connect", "用法", ex, role, pool, g["title"], ex, ask=ask,
+                note="筆記記載的接續：" + next(r for r, e in g["rules"] if e == ex),
+                source_url=g.get("source_url", ""))
 
     # 內容修改、刪除由每次全量重建反映；穩定 ID 不依賴日期或抽題順序。
     result, seen, answers = [], set(), {}

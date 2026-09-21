@@ -16,6 +16,11 @@ def block(kind, text="", ident="b", nested=False, tokens=None):
             kind: {"rich_text": tokens if tokens is not None else [rich(text)]}}
 
 
+def particle(title, rows):
+    """接續表形狀的文法點：每一列是（接續描述, 例）。"""
+    return {"title": title, "rules": [list(r) for r in rows], "examples": []}
+
+
 def entry(title, key, example):
     return {"title": title, "rules": [["名詞＋" + key, example]],
             "examples": [[example, "中文翻譯"]]}
@@ -190,14 +195,67 @@ class QuestionTests(unittest.TestCase):
         qs = b.build_questions([], grammar)
         self.assertFalse(any(q['kind'] == 'grammar' and '財布' in q['stem'] for q in qs))
 
-    def test_every_connection_row_uses_its_example(self):
-        grammar = [entry('用法' + str(i), str(i), '例文' + str(i)) for i in range(5)]
-        grammar[0]['rules'] += [['比較＋形', '対比の例'], ['三番目＋形', '三番目の例']]
+    def test_usage_role_only_from_semantic_labels(self):
+        self.assertEqual(b.usage_role('場所（ばしょ）＋に＋ある／いる'), '場所')
+        self.assertEqual(b.usage_role('名詞（めいし）（起点・きてん）＋を＋移動動詞'), '起点')
+        self.assertEqual(b.usage_role('名詞＋と＋名詞（全部列挙・ぜんぶれっきょ）'), '全部列挙')
+        self.assertEqual(b.usage_role('職業名詞＋をしている（現在）'), '現在')
+        # 詞類描述的是接續形式，不是語意；拿來當選項無法辨別用法
+        self.assertIsNone(b.usage_role('な形容詞（けいようし）語幹＋で'))
+        self.assertIsNone(b.usage_role('動詞普通形＋し'))
+        # 帶著助詞的是句型描述，不是角色
+        self.assertIsNone(b.usage_role('場所に＋名詞＋が＋いる／ある'))
+        # 括號標了對照、別用法的不是這個文法點的用法
+        self.assertIsNone(b.usage_role('（対比）意志動詞辞書形＋ために'))
+
+    def test_usage_question_asks_about_the_particle(self):
+        grammar = [particle('格助詞　に', [
+            ['場所（ばしょ）＋に＋ある／いる', '机の上に本がある'],
+            ['時刻（じこく）＋に＋動詞', '7時に起きる'],
+            ['目的地（もくてきち）＋に＋行く', '学校に行く'],
+            ['結果（けっか）＋に＋なる', '医者になる']])]
         qs = [q for q in b.build_questions([], grammar) if q['kind'] == 'connect']
-        self.assertIn('三番目の例', [q['stem'] for q in qs])
-        self.assertTrue(all('用法' not in q['stem'] for q in qs))
-        own = {r for r, _ in grammar[0]['rules']}
-        self.assertTrue(all(not (set(q['pool']) & own) for q in qs if q['source'] == '用法0'))
+        self.assertEqual(len(qs), 4)
+        # 題幹是例句本身，不洩漏文法點名稱
+        self.assertIn('机の上に本がある', [q['stem'] for q in qs])
+        self.assertTrue(all('格助詞' not in q['stem'] for q in qs))
+        q = next(q for q in qs if q['stem'] == '机の上に本がある')
+        self.assertIn('「に」', q['instruction'])
+        self.assertEqual(q['answer'], '場所')
+        # 同一個助詞的其他用法才是會混淆的誘答，夠用時不向外借
+        self.assertEqual(set(q['pool']), {'時刻', '目的地', '結果'})
+
+    def test_usage_distractors_exclude_roles_the_title_already_claims(self):
+        grammar = [
+            particle('格助詞　から（起点・きてん／口語）', [
+                ['時間（じかん）／場所（ばしょ）＋から', '9時から始まる'],
+                ['理由（りゆう）＋から', '疲れたから休む'],
+                ['材料（ざいりょう）＋から＋作られる', '米から造られる']]),
+            particle('格助詞　を', [
+                ['名詞（めいし）（起点・きてん）＋を＋移動動詞', '電車を降りる'],
+                ['名詞（めいし）（経過点・けいかてん）＋を＋移動動詞', '橋を渡る'],
+                ['名詞（めいし）（対象・たいしょう）＋を＋他動詞', 'コーヒーを飲む']]),
+        ]
+        qs = [q for q in b.build_questions([], grammar) if q['kind'] == 'connect']
+        kara = next(q for q in qs if q['stem'] == '9時から始まる')
+        # 標題已寫明 から 是起点，「9時から」確實是起点，不能當錯誤選項
+        self.assertNotIn('起点', kara['pool'])
+        self.assertTrue({'理由', '材料'} <= set(kara['pool']))
+
+    def test_usage_skips_examples_that_match_more_than_one_role(self):
+        grammar = [
+            particle('格助詞　に', [
+                ['場所（ばしょ）＋に＋ある', '同じ例'],
+                ['時刻（じこく）＋に＋動詞', '7時に起きる'],
+                ['目的地（もくてきち）＋に＋行く', '学校に行く'],
+                ['結果（けっか）＋に＋なる', '医者になる']]),
+            particle('格助詞　で', [
+                ['手段（しゅだん）＋で', '同じ例'],
+                ['原因（げんいん）＋で', '台風で止まる'],
+                ['期限（きげん）＋で＋終わる', '1時間で終わる']]),
+        ]
+        qs = [q for q in b.build_questions([], grammar) if q['kind'] == 'connect']
+        self.assertNotIn('同じ例', [q['stem'] for q in qs])
 
     def test_failed_build_preserves_existing_bank(self):
         with tempfile.TemporaryDirectory() as directory:
