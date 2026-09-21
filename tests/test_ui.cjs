@@ -8,10 +8,14 @@ const html = fs.readFileSync(path.join(__dirname, '../site/index.html'), 'utf8')
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 const elements = new Map();
 const context = vm.createContext({
-  document: {getElementById(id){
-    if(!elements.has(id)) elements.set(id, {addEventListener(){}});
-    return elements.get(id);
-  }},
+  document: {
+    getElementById(id){
+      if(!elements.has(id)) elements.set(id, {addEventListener(){}});
+      return elements.get(id);
+    },
+    // 鍵盤操作綁在 document 上。
+    addEventListener(){},
+  },
   // 不連線；測試抽題與呈現輔助函式。
   fetch: () => new Promise(() => {}),
 });

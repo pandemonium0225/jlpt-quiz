@@ -3,133 +3,180 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>語彙・文法テスト</title>
+<title>語彙と文法</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@400;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Noto+Sans+TC:wght@400;500&display=swap" rel="stylesheet">
 <style>
+/* 紙・墨・朱：平時只有紙與墨，朱色留給揭曉答案的那一刻。 */
 :root{
-  --ink:#16203a; --ink-soft:#4a5570;
-  --paper:#eef0ea; --card:#ffffff; --rule:#c9cdc2;
-  --indigo:#23386b; --indigo-soft:#e3e7f0;
-  --moss:#4a6b46; --moss-soft:#e2ecdf;
-  --clay:#8c4a3f; --clay-soft:#f1e2df;
-  --shadow:rgba(22,32,58,.10);
+  --washi:#f5f4f0;   /* 紙 */
+  --sumi:#1f1d1b;    /* 墨 */
+  --usuzumi:#6e6b66; /* 薄墨：次要文字、已排除的選項 */
+  --kei:#dedcd6;     /* 罫線 */
+  --shu:#d7182a;     /* 朱：紅筆 */
+  --tint:rgba(31,29,27,.055);
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --ink:#e8eaf0; --ink-soft:#a3aac0;
-    --paper:#141824; --card:#1c2130; --rule:#343b4e;
-    --indigo:#9db4e8; --indigo-soft:#232b41;
-    --moss:#9dc396; --moss-soft:#23301f;
-    --clay:#dfa096; --clay-soft:#33211e;
-    --shadow:rgba(0,0,0,.4);
+    --washi:#17171a; --sumi:#e9e7e2; --usuzumi:#8c8880;
+    --kei:#33322e; --shu:#ff5f57; --tint:rgba(233,231,226,.07);
   }
 }
 :root[data-theme="dark"]{
-  --ink:#e8eaf0; --ink-soft:#a3aac0;
-  --paper:#141824; --card:#1c2130; --rule:#343b4e;
-  --indigo:#9db4e8; --indigo-soft:#232b41;
-  --moss:#9dc396; --moss-soft:#23301f;
-  --clay:#dfa096; --clay-soft:#33211e;
-  --shadow:rgba(0,0,0,.4);
+  --washi:#17171a; --sumi:#e9e7e2; --usuzumi:#8c8880;
+  --kei:#33322e; --shu:#ff5f57; --tint:rgba(233,231,226,.07);
 }
+
 *{box-sizing:border-box}
-body{margin:0;background:var(--paper);color:var(--ink);
-  font-family:"Noto Sans TC","Zen Old Mincho",system-ui,sans-serif;
-  line-height:1.75;-webkit-text-size-adjust:100%}
-.wrap{max-width:46rem;margin:0 auto;padding:2.5rem 1.25rem 7rem}
-header.masthead{border-bottom:2px solid var(--indigo);padding-bottom:1.5rem;margin-bottom:2rem}
-h1{font-family:"Zen Old Mincho",serif;font-weight:700;
-  font-size:clamp(1.7rem,5vw,2.4rem);line-height:1.35;margin:0 0 .6rem;letter-spacing:.02em}
-.meta{margin:0;color:var(--ink-soft);font-size:.88rem}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--washi);color:var(--sumi);
+  font-family:"Noto Sans TC","Zen Kaku Gothic New",system-ui,sans-serif;
+  font-size:16px;line-height:1.85;
+  font-feature-settings:"palt" 1;
+}
+:lang(ja){font-family:"Zen Kaku Gothic New","Noto Sans TC",system-ui,sans-serif}
 
-.q{background:var(--card);border:1px solid var(--rule);border-radius:3px;
-  padding:1.4rem 1.3rem;margin-bottom:1.4rem;box-shadow:0 1px 2px var(--shadow)}
-.q-head{display:flex;align-items:baseline;gap:.7rem;margin-bottom:.9rem}
-.q-num{font-family:"Zen Old Mincho",serif;font-size:1.05rem;font-weight:700;color:var(--indigo);flex:none}
-.q-type{font-size:.78rem;color:var(--ink-soft);border:1px solid var(--rule);border-radius:2px;padding:.05rem .45rem}
-.instruction{font-size:.9rem;color:var(--ink-soft);margin:0 0 .8rem}
-.stem{font-family:"Zen Old Mincho",serif;font-size:1.15rem;line-height:2.5;margin:0 0 1rem;white-space:pre-wrap;overflow-wrap:anywhere}
-rt{font-family:"Noto Sans TC",sans-serif;font-size:.58em;font-weight:400}
-.blank{display:inline-block;min-width:4em;text-align:center;color:var(--indigo);background:var(--indigo-soft);border-bottom:2px solid var(--indigo);line-height:1.5;margin:0 .15em}
-.stem .quoted{display:block;margin-top:.5rem;padding-left:.8rem;border-left:3px solid var(--indigo)}
-.hint{margin:0 0 1rem;padding-left:.8rem;border-left:3px solid var(--rule);
-  color:var(--ink-soft);font-size:.9rem;line-height:1.8}
-.opts{list-style:none;margin:0;padding:0;display:grid;gap:.4rem}
-.opt{display:flex;gap:.7rem;align-items:flex-start;padding:.6rem .75rem;
-  border:1px solid var(--rule);border-radius:3px;cursor:pointer;
-  transition:border-color .12s,background .12s;font-size:.98rem;
-  font-family:"Zen Old Mincho",serif}
-.opt:hover{border-color:var(--indigo)}
-.opt input{margin:.45rem 0 0;accent-color:var(--indigo);flex:none}
-.opt:focus-within{outline:2px solid var(--indigo);outline-offset:2px}
-.opt.picked{background:var(--indigo-soft);border-color:var(--indigo)}
-.graded .opt{cursor:default}
-.graded .opt:hover{border-color:var(--rule)}
-.graded .opt.picked{background:transparent;border-color:var(--rule)}
-.graded .opt.right{background:var(--moss-soft);border-color:var(--moss)}
-.graded .opt.wrong{background:var(--clay-soft);border-color:var(--clay)}
-.mark{margin-left:auto;font-weight:700;font-size:.82rem;flex:none;padding-top:.2rem;
-  font-family:"Noto Sans TC",sans-serif}
-.opt.right .mark{color:var(--moss)}
-.opt.wrong .mark{color:var(--clay)}
-.exp{margin-top:1rem;padding-top:.9rem;border-top:1px dashed var(--rule);font-size:.92rem;display:none}
-.graded .exp{display:block}
-.exp h3{font-size:.9rem;margin:0 0 .4rem;color:var(--indigo);font-weight:700}
-.exp p{margin:.5rem 0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:2.2}
-.exp a{color:var(--indigo)}
+.page{max-width:32rem;margin:0 auto;padding:2rem 1.5rem 4rem;
+  min-height:100vh;display:flex;flex-direction:column}
 
-.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);
-  border-top:1px solid var(--rule);box-shadow:0 -2px 12px var(--shadow);padding:.85rem 1.25rem}
-.bar-in{max-width:46rem;margin:0 auto;display:flex;align-items:center;gap:.8rem;flex-wrap:wrap}
-.count{font-size:.9rem;color:var(--ink-soft);flex:1;min-width:7rem}
-button{font-family:inherit;font-size:.93rem;font-weight:500;padding:.6rem 1.2rem;
-  border-radius:3px;cursor:pointer;border:1px solid var(--indigo);transition:opacity .12s}
-button:focus-visible{outline:2px solid var(--indigo);outline-offset:2px}
-#grade{background:var(--indigo);color:var(--paper)}
-#grade:disabled{opacity:.4;cursor:not-allowed}
-#again{background:transparent;color:var(--indigo)}
-.score{display:none;background:var(--card);border:2px solid var(--indigo);border-radius:3px;
-  padding:1.6rem 1.3rem;margin-bottom:2rem;text-align:center}
+/* ── 答案欄：同時是進度、分數與回看入口 ───────────────── */
+.sheet{display:flex;gap:.35rem;margin-bottom:3rem}
+.mk{flex:none;width:1.5rem;height:1.6rem;display:flex;align-items:flex-end;justify-content:center;
+  border:0;border-bottom:2px solid var(--kei);
+  font-size:.92rem;line-height:1.35;color:var(--usuzumi);
+  background:none;padding:0;font-family:inherit;color-scheme:inherit}
+.mk.now{border-bottom-color:var(--sumi)}
+.mk.ok{color:var(--shu)}
+.mk.ng{color:var(--sumi)}
+.sheet.review .mk.ok,
+.sheet.review .mk.ng{cursor:pointer}
+.sheet.review .mk.now{border-bottom-color:var(--sumi)}
+.mk:focus-visible{outline:2px solid var(--sumi);outline-offset:2px}
+.sheet.big{margin-bottom:2rem}
+.sheet.big .mk{width:2.2rem;height:2.4rem;font-size:1.3rem}
+
+.body{flex:1}
+
+/* ── 題目 ────────────────────────────────────────── */
+.q{animation:enter .1s ease-out}
+@keyframes enter{from{opacity:0}to{opacity:1}}
+.kind{margin:0;font-size:.8rem;color:var(--usuzumi);letter-spacing:.08em}
+.gp{margin:.3rem 0 0;font-size:1.05rem}
+.ask{margin:.15rem 0 2rem;font-size:.9rem;color:var(--usuzumi)}
+
+.stem{
+  margin:0 0 2rem;font-size:1.45rem;line-height:2.5;min-height:5em;
+  white-space:pre-wrap;overflow-wrap:anywhere;
+}
+rt{font-size:.5em;font-weight:400;color:var(--usuzumi);line-height:1.2}
+.blank{display:inline-block;min-width:3.4em;text-align:center;
+  background:var(--tint);border-bottom:2px solid var(--sumi);
+  line-height:1.5;margin:0 .1em}
+.stem .quoted{display:block;margin-top:.8rem;padding-left:1rem;
+  border-left:1px solid var(--kei)}
+
+.opts{list-style:none;margin:0;padding:0}
+.opt{
+  position:relative;display:flex;gap:.75rem;align-items:baseline;
+  padding:.45rem .8rem;cursor:pointer;
+  font-size:1.0625rem;line-height:1.7;
+  transition:background .1s;
+}
+.opt:hover{background:var(--tint)}
+.opt:has(input:focus-visible){outline:2px solid var(--sumi);outline-offset:-2px}
+.opt input{position:absolute;top:0;left:0;opacity:0;width:0;height:0}
+.no{flex:none;color:var(--usuzumi);font-size:.95rem}
+.txt{flex:1;overflow-wrap:anywhere}
+.mark{flex:none;font-size:1.05rem;line-height:1.7}
+
+/* 揭曉：整頁唯一的朱色，一題只出現一次。 */
+.done .opt{cursor:default}
+.done .opt:hover{background:none}
+.done .opt.dim .no,
+.done .opt.dim .txt{color:var(--usuzumi)}
+.done .opt.right::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:2px;
+  background:var(--shu);transform-origin:top;animation:draw .18s ease-out}
+@keyframes draw{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+.done .opt.right .no,
+.done .opt.right .mark{color:var(--shu)}
+.done .opt.wrong .mark{color:var(--sumi)}
+
+/* ── 解說：作答後才顯示 ────────────────────────────── */
+.exp{display:none;margin-top:2rem;padding-top:1.4rem;border-top:1px solid var(--kei);
+  font-size:.9rem;line-height:2}
+.done .exp{display:block}
+.exp h3{margin:0 0 1rem;font-size:.9rem;font-weight:500}
+.exp p{margin:.5rem 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.exp .lab{color:var(--usuzumi);margin-right:.6em}
+.exp .caveat{font-size:.82rem;color:var(--usuzumi)}
+.exp a{color:var(--sumi);text-underline-offset:.2em}
+.exp details{margin:.7rem 0;color:var(--usuzumi)}
+.exp summary{cursor:pointer;font-size:.85rem}
+
+/* ── 動作 ────────────────────────────────────────── */
+.act{margin-top:2.2rem;display:flex;justify-content:flex-end}
+button.go{
+  font:inherit;font-size:.95rem;padding:.55rem 1.6rem;
+  color:var(--sumi);background:none;border:1px solid var(--kei);
+  border-radius:0;cursor:pointer;transition:border-color .1s}
+button.go:hover{border-color:var(--sumi)}
+button.go:focus-visible{outline:2px solid var(--sumi);outline-offset:2px}
+[hidden]{display:none!important}
+
+/* ── 結果 ────────────────────────────────────────── */
+.score{display:none}
 .score.show{display:block}
-.score .big{font-family:"Zen Old Mincho",serif;font-size:3.2rem;line-height:1.1;
-  color:var(--indigo);font-weight:700;display:block}
-.score .of{font-size:1.1rem;color:var(--ink-soft)}
-.score p{margin:.7rem 0 0;color:var(--ink-soft);font-size:.95rem}
-.state{padding:2rem 0;color:var(--ink-soft);text-align:center}
-@media (prefers-reduced-motion: reduce){*{transition:none!important}}
-@media (max-width:480px){.wrap{padding:1.75rem 1rem 8rem}.q{padding:1.1rem 1rem}}
+.score p{margin:.3rem 0;font-size:.95rem}
+.score .sub{color:var(--usuzumi);font-size:.9rem}
+
+.state{color:var(--usuzumi);font-size:.95rem}
+
+footer{margin-top:4rem;padding-top:1.2rem;border-top:1px solid var(--kei);
+  font-size:.78rem;line-height:1.9;color:var(--usuzumi)}
+footer p{margin:0}
+
+@media (prefers-reduced-motion:reduce){
+  *,::before{animation:none!important;transition:none!important}
+}
+@media (max-width:480px){
+  .page{padding:1.5rem 1.15rem 3rem}
+  .stem{font-size:1.3rem;line-height:2.4;margin-bottom:1.6rem}
+  .sheet{margin-bottom:2.5rem;gap:.3rem}
+}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header class="masthead">
-    <h1>日文筆記・語彙與文法練習</h1>
-    <p class="meta">依 Notion 原句複習；翻譯與筆記來源於計分後顯示。每天同步，也可透過 GitHub Actions 手動重建。</p>
-    <p class="meta" id="meta">読み込み中…</p>
-  </header>
-  <div class="score" id="score" role="status">
-    <span class="big" id="scoreNum">0</span><span class="of">／<span id="scoreTotal">0</span></span>
-    <p id="scoreMsg"></p>
-  </div>
-  <main id="quiz"><p class="state">正在讀取題庫…</p></main>
-</div>
+<div class="page">
+  <div class="sheet" id="sheet" role="group" aria-label="答案欄"></div>
 
-<div class="bar">
-  <div class="bar-in">
-    <span class="count" id="count">—</span>
-    <button id="again" type="button" disabled>換一組題目</button>
-    <button id="grade" type="button" disabled>計分</button>
-  </div>
+  <main class="body">
+    <div id="quiz"><p class="state">正在讀取題庫…</p></div>
+    <section class="score" id="score" role="status">
+      <p id="scoreMsg"></p>
+      <p class="sub" id="scoreHint"></p>
+    </section>
+    <div class="act">
+      <button class="go" id="next" type="button" hidden>下一題</button>
+      <button class="go" id="again" type="button" hidden>換一組題目</button>
+    </div>
+  </main>
+
+  <footer>
+    <p>語彙と文法</p>
+    <p id="meta">読み込み中…</p>
+  </footer>
 </div>
 
 <script>
 const PER_ROUND = 10;
-let BANK = [], current = [], graded = false;
+const NO = ['①', '②', '③', '④'];
+let BANK = [], current = [], picks = [], cursor = 0, graded = false;
 
 const $ = id => document.getElementById(id);
-const quiz = $('quiz'), gradeBtn = $('grade'), againBtn = $('again');
+const quiz = $('quiz'), nextBtn = $('next'), againBtn = $('again');
 
 function escapeHtml(value){
   return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -141,6 +188,15 @@ function japanese(value){
     .replace(/([一-龯々〆ヶ]+)[（(]([ぁ-んァ-ヴー・\s]+)[）)]/g,
       '<ruby>$1<rp>（</rp><rt>$2</rt><rp>）</rp></ruby>')
     .replaceAll('［　］', '<span class="blank" aria-label="空格">［　］</span>');
+}
+
+// 文法題的 note 第一行與「來源」是同一個文法點標題，不重複顯示；
+// 每題都一樣的但書降一級，不與解說本文同權重。
+function noteLines(q){
+  const source = String(q.source ?? '').trim();
+  return String(q.note ?? '').split('\n')
+    .map(line => line.trim()).filter(Boolean)
+    .filter(line => line.replace(/^文法點：/, '').trim() !== source);
 }
 
 function validQuestion(q){
@@ -183,99 +239,159 @@ function draw(){
   });
 }
 
+// 答案欄：未答是細罫線，作答中加粗，答對朱色 ○，答錯墨色 ×。
+function sheet(){
+  const el = $('sheet');
+  el.className = graded ? 'sheet big review' : 'sheet';
+  el.innerHTML = current.map((q, i) => {
+    const pick = picks[i];
+    let cls = 'mk', glyph = '';
+    if(pick === undefined){
+      if(i === cursor && !graded) cls += ' now';
+    } else if(pick === q.ans){
+      cls += ' ok'; glyph = '○';
+    } else {
+      cls += ' ng'; glyph = '×';
+    }
+    if(graded && i === cursor) cls += ' now';
+    const tag = graded && pick !== undefined ? 'button' : 'span';
+    const attrs = tag === 'button'
+      ? ` type="button" data-i="${i}" aria-label="回看第 ${i + 1} 題"`
+      : ` aria-label="第 ${i + 1} 題"`;
+    return `<${tag} class="${cls}"${attrs}>${glyph}</${tag}>`;
+  }).join('');
+}
+
 function render(){
   graded = false;
   $('score').classList.remove('show');
   quiz.innerHTML = '';
-  current.forEach((q, i) => {
-    const sec = document.createElement('section');
-    sec.className = 'q';
-    sec.innerHTML = `
-      <div class="q-head">
-        <span class="q-num">問題 ${i + 1}</span>
-        <span class="q-type">${escapeHtml(q.label)}</span>
-      </div>
-      <p class="instruction">${escapeHtml(q.instruction)}</p>
-      <p class="stem" lang="ja">${japanese(q.stem)}</p>
-      <ul class="opts">
-        ${q.opts.map((o, j) => `
-          <li><label class="opt" data-j="${j}">
-            <input type="radio" name="q${i}" value="${j}">
-            <span lang="ja">${j + 1}　${japanese(o)}</span>
-            <span class="mark"></span>
-          </label></li>`).join('')}
-      </ul>
-      <div class="exp">
-        <h3>解答：${q.ans + 1}　${japanese(q.answer)}</h3>
-        ${q.original ? `<p lang="ja">${q.punctuation_restored ? '補標點後的例句' : '原句'}：${japanese(q.original)}</p>` : ''}
-        ${q.punctuation_restored && q.source_text ? `<details><summary>查看 Notion 原始段落（標點由程式補齊）</summary><p lang="ja">${escapeHtml(q.source_text)}</p></details>` : ''}
-        ${q.translation ? `<p>筆記翻譯：${escapeHtml(q.translation)}</p>` : ''}
-        ${q.note ? `<p>${japanese(q.note)}</p>` : ''}
-        ${q.source ? `<p>筆記來源：${escapeHtml(q.source)}</p>` : ''}
-        ${/^https:\/\/www\.notion\.so\/[a-f0-9]{32}(#[a-f0-9]{32})?$/.test(q.source_url || '') ? `<a href="${escapeHtml(q.source_url)}" target="_blank" rel="noopener noreferrer">開啟 Notion 筆記</a>` : ''}
-      </div>`;
-    quiz.appendChild(sec);
-  });
-  $('scoreTotal').textContent = current.length;
-  refresh();
+  const q = current[cursor];
+  if(!q) return;
+  const sec = document.createElement('section');
+  sec.className = 'q';
+  sec.innerHTML = `
+    <p class="kind">${escapeHtml(q.label)}</p>
+    ${q.kind === 'connect' && q.source ? `<p class="gp" lang="ja">${japanese(q.source)}</p>` : ''}
+    <p class="ask">${escapeHtml(q.instruction)}</p>
+    <p class="stem" lang="ja">${japanese(q.stem)}</p>
+    <ul class="opts">
+      ${q.opts.map((o, j) => `
+        <li><label class="opt" data-j="${j}">
+          <input type="radio" name="opt" value="${j}">
+          <span class="no">${NO[j]}</span>
+          <span class="txt" lang="ja">${japanese(o)}</span>
+          <span class="mark"></span>
+        </label></li>`).join('')}
+    </ul>
+    <div class="exp">
+      <h3>解答　${NO[q.ans]}　<span lang="ja">${japanese(q.answer)}</span></h3>
+      ${q.original ? `<p lang="ja"><span class="lab">${q.punctuation_restored ? '補標點後的例句' : '原句'}</span>${japanese(q.original)}</p>` : ''}
+      ${q.punctuation_restored && q.source_text ? `<details><summary>查看 Notion 原始段落（標點由程式補齊）</summary><p lang="ja">${escapeHtml(q.source_text)}</p></details>` : ''}
+      ${q.translation ? `<p><span class="lab">翻譯</span>${escapeHtml(q.translation)}</p>` : ''}
+      ${noteLines(q).map(line =>
+        `<p${/不代表|不宣稱/.test(line) ? ' class="caveat"' : ''}>${japanese(line)}</p>`).join('')}
+      ${q.source ? `<p><span class="lab">來源</span><span lang="ja">${japanese(q.source)}</span></p>` : ''}
+      ${/^https:\/\/www\.notion\.so\/[a-f0-9]{32}(#[a-f0-9]{32})?$/.test(q.source_url || '') ? `<p><a href="${escapeHtml(q.source_url)}" target="_blank" rel="noopener noreferrer">開啟 Notion 筆記</a></p>` : ''}
+    </div>`;
+  quiz.appendChild(sec);
+  sheet();
+  if(picks[cursor] !== undefined) reveal();
+  else{
+    nextBtn.hidden = true;
+    againBtn.hidden = true;
+  }
   window.scrollTo({top: 0, behavior: 'smooth'});
 }
 
-function answered(){
-  return current.filter((_, i) => document.querySelector(`input[name="q${i}"]:checked`)).length;
-}
-
-function refresh(){
-  $('count').textContent = `已作答 ${answered()} / ${current.length}`;
-  gradeBtn.disabled = graded || answered() === 0;
-}
-
-quiz.addEventListener('change', e => {
-  if(graded) return;
-  const label = e.target.closest('.opt');
-  if(!label) return;
-  label.closest('.opts').querySelectorAll('.opt').forEach(o => o.classList.remove('picked'));
-  label.classList.add('picked');
-  refresh();
-});
-
-gradeBtn.addEventListener('click', () => {
-  graded = true;
-  let score = 0;
-  current.forEach((q, i) => {
-    const sec = quiz.children[i];
-    sec.classList.add('graded');
-    const picked = sec.querySelector(`input[name="q${i}"]:checked`);
-    const pj = picked ? Number(picked.value) : -1;
-    if(pj === q.ans) score++;
-    sec.querySelectorAll('.opt').forEach(opt => {
-      const j = Number(opt.dataset.j);
-      opt.querySelector('input').disabled = true;
-      if(j === q.ans){
-        opt.classList.add('right');
-        opt.querySelector('.mark').textContent = '✓ 正解';
-      } else if(j === pj){
-        opt.classList.add('wrong');
-        opt.querySelector('.mark').textContent = '✗ 你的答案';
-      }
-    });
+// 標出正解與你的選擇；顏色只用在正解那一列。
+function reveal(){
+  const q = current[cursor], pick = picks[cursor];
+  const sec = quiz.firstElementChild;
+  if(!sec) return;
+  sec.classList.add('done');
+  sec.querySelectorAll('.opt').forEach(opt => {
+    const j = Number(opt.dataset.j);
+    opt.querySelector('input').disabled = true;
+    const mark = opt.querySelector('.mark');
+    if(j === q.ans){ opt.classList.add('right'); mark.textContent = '○'; }
+    else if(j === pick){ opt.classList.add('wrong'); mark.textContent = '×'; }
+    else opt.classList.add('dim');
   });
-  $('scoreNum').textContent = score;
+  const last = cursor === current.length - 1;
+  nextBtn.hidden = graded;
+  nextBtn.textContent = last ? '看結果' : '下一題';
+  againBtn.hidden = !graded;
+}
+
+function choose(j){
+  if(graded || picks[cursor] !== undefined) return;
+  picks[cursor] = j;
+  reveal();
+  sheet();
+}
+
+function finish(){
+  graded = true;
+  const score = current.filter((q, i) => picks[i] === q.ans).length;
   const pct = score / current.length;
-  $('scoreMsg').textContent =
-    pct === 1 ? '全對。這一輪的內容你已經掌握了。' :
-    pct >= .75 ? '表現不錯，看一下錯題的解說補上細節。' :
-    pct >= .5 ? '一半左右，建議回頭讀一次對應的筆記段落。' :
+  quiz.innerHTML = '';
+  $('scoreMsg').textContent = `${current.length} 題答對 ${score} 題。`;
+  $('scoreHint').textContent =
+    pct === 1 ? '這一輪的內容你已經掌握了。' :
+    pct >= .7 ? '點上面的 × 可以回看錯的題目。' :
+    pct >= .4 ? '建議回頭讀一次對應的筆記段落。' :
     '先把解說讀過一遍，再換一組題目練習。';
   $('score').classList.add('show');
-  gradeBtn.disabled = true;
-  $('score').scrollIntoView({behavior: 'smooth', block: 'center'});
-});
+  cursor = -1;
+  sheet();
+  nextBtn.hidden = true;
+  againBtn.hidden = false;
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
 
-againBtn.addEventListener('click', () => {
+function review(i){
+  $('score').classList.remove('show');
+  const keep = graded;
+  cursor = i;
+  render();
+  graded = keep;
+  reveal();
+  sheet();
+}
+
+function startRound(){
   if(!BANK.length) return;
   current = draw();
+  picks = [];
+  cursor = 0;
   render();
+}
+
+quiz.addEventListener('click', e => {
+  const label = e.target.closest('.opt');
+  if(label) choose(Number(label.dataset.j));
+});
+
+$('sheet').addEventListener('click', e => {
+  const btn = e.target.closest('.mk[data-i]');
+  if(btn) review(Number(btn.dataset.i));
+});
+
+nextBtn.addEventListener('click', () => {
+  if(cursor === current.length - 1) finish();
+  else{ cursor++; render(); }
+});
+
+againBtn.addEventListener('click', startRound);
+
+document.addEventListener('keydown', e => {
+  if(e.metaKey || e.ctrlKey || e.altKey) return;
+  if(e.key >= '1' && e.key <= '4'){ choose(Number(e.key) - 1); return; }
+  if((e.key === 'Enter' || e.key === 'ArrowRight') && !nextBtn.hidden){
+    e.preventDefault();
+    nextBtn.click();
+  }
 });
 
 fetch('quiz.json?v=' + Date.now())
@@ -286,18 +402,19 @@ fetch('quiz.json?v=' + Date.now())
   .then(data => {
     BANK = (Array.isArray(data.questions) ? data.questions : []).filter(validQuestion);
     $('meta').textContent =
-      `題庫 ${BANK.length} 題（語彙 ${BANK.filter(q => q.kind === 'vocab').length}／文法 ${BANK.filter(q => q.kind === 'grammar').length}／接續 ${BANK.filter(q => q.kind === 'connect').length}）｜同步於 ${data.generated_at}（台灣時間）`;
+      `題庫 ${BANK.length} 題（語彙 ${BANK.filter(q => q.kind === 'vocab').length}、`
+      + `文法 ${BANK.filter(q => q.kind === 'grammar').length}、`
+      + `接續 ${BANK.filter(q => q.kind === 'connect').length}），`
+      + `同步於 ${data.generated_at} 台灣時間。內容取自 Notion 筆記，每天重建一次。`;
     if(!BANK.length){
-      quiz.innerHTML = '<p class="state">目前沒有可用題目。請確認 Notion 分享權限、筆記格式，以及是否有足夠的同類選項，再重建題庫。</p>';
+      quiz.innerHTML = '<p class="state">題庫是空的。檢查 Notion 分享權限與筆記格式，確認同類選項夠湊滿四個，再重建一次。</p>';
       return;
     }
-    current = draw();
-    render();
-    againBtn.disabled = false;
+    startRound();
   })
   .catch(err => {
-    $('meta').textContent = '題庫讀取失敗';
-    quiz.innerHTML = `<p class="state">讀不到 quiz.json（${escapeHtml(err.message)}）。請檢查 GitHub Actions 是否執行成功。</p>`;
+    $('meta').textContent = '題庫讀取失敗。';
+    quiz.innerHTML = `<p class="state">讀不到 quiz.json（${escapeHtml(err.message)}）。到 GitHub Actions 看最近一次建置是否成功。</p>`;
   });
 </script>
 </body>
