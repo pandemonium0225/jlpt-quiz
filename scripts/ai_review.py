@@ -1,6 +1,7 @@
 """有預算上限、可續跑的 AI 日文審題。API 金鑰只從環境變數讀取。"""
 
 import hashlib
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
 import math
 import os
@@ -152,10 +153,13 @@ def call_openai(body):
 
 
 class Reviewer:
-    def __init__(self, state_path, run_budget=1.0, month_budget=5.0, transport=call_openai):
+    def __init__(self, state_path, run_budget=1.0, month_budget=5.0, transport=call_openai, workers=3):
         budgets = (month_budget,) if run_budget is None else (run_budget, month_budget)
         if not all(math.isfinite(x) and x >= 0 for x in budgets):
             raise ValueError("AI 預算必須是非負有限數值")
+        if type(workers) is not int or not 1 <= workers <= 3:
+            raise ValueError("AI 同時審題數必須介於 1 至 3")
+        self.workers = workers
         self.path = Path(state_path)
         self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {
             "state_version": 1, "cache": {}, "months": {}}
@@ -188,6 +192,13 @@ class Reviewer:
         return True
 
     def review(self, question):
+        verdict, request = self._prepare_review(question)
+        if request is None:
+            return verdict
+        return self._finish_review(question, request, self.transport(request["body"]))
+
+    def _prepare_review(self, question, allow_request=True):
+        """僅由主執行緒讀寫帳本；先存下所有在途請求的費用預留。"""
         # 長時間執行可能跨 UTC 月底；各請求按開始月份預留與結算。
         self.month = time.strftime("%Y-%m", time.gmtime())
         self.stats["month_usd"] = self.state["months"].get(self.month, 0.0)
@@ -195,7 +206,9 @@ class Reviewer:
         cached = self.state["cache"].get(key)
         if cached:
             self.stats["cache_hits"] += 1
-            return validate_verdict(cached["verdict"], question)
+            return validate_verdict(cached["verdict"], question), None
+        if not allow_request:
+            return None, None
         body = request_body(question)
         size = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
         if size > MAX_REQUEST_BYTES:
@@ -205,24 +218,29 @@ class Reviewer:
         month_spend = self.state["months"].get(self.month, 0.0)
         if (self.run_budget is not None and self.stats["run_usd"] + reserve > self.run_budget
                 or month_spend + reserve > self.month_budget):
-            return None
+            return None, None
         # 發送前先預留；請求失敗也不歸零，避免逾時重試造成隱藏花費。
         self.stats["run_usd"] += reserve
         self.state["months"][self.month] = month_spend + reserve
         self.stats["month_usd"] = self.state["months"][self.month]
         save_state(self.path, self.state)
         self.stats["calls"] += 1
-        response = self.transport(body)
-        usage = response.get("usage", {})
+        return None, {"key": key, "body": body, "reserve": reserve, "month": self.month}
+
+    def _finish_review(self, question, request, response):
+        """主執行緒結算結果；工作執行緒只呼叫 API，不碰共用帳本。"""
+        self.month = time.strftime("%Y-%m", time.gmtime())
+        self.stats["month_usd"] = self.state["months"].get(self.month, 0.0)
+        usage = response.get("usage") or {}
         inputs, outputs = usage.get("input_tokens"), usage.get("output_tokens")
         if type(inputs) is int and inputs >= 0 and type(outputs) is int and outputs >= 0:
             # cache 寫入可能另計；以完整標準價加其加價估算，不依賴 cache 折扣。
-            written = usage.get("input_tokens_details", {}).get("cache_write_tokens", 0)
+            written = (usage.get("input_tokens_details") or {}).get("cache_write_tokens", 0)
             written = written if type(written) is int and written >= 0 else 0
             actual = ((inputs + written * 0.25) * INPUT_USD_PER_MILLION + outputs * OUTPUT_USD_PER_MILLION) / 1_000_000
-            self.stats["run_usd"] += actual - reserve
-            self.state["months"][self.month] += actual - reserve
-            self.stats["month_usd"] = self.state["months"][self.month]
+            self.stats["run_usd"] += actual - request["reserve"]
+            self.state["months"][request["month"]] += actual - request["reserve"]
+            self.stats["month_usd"] = self.state["months"].get(self.month, 0.0)
             save_state(self.path, self.state)
         if response.get("status") != "completed":
             if (response.get("incomplete_details") or {}).get("reason") == "max_output_tokens":
@@ -233,35 +251,30 @@ class Reviewer:
         if len(texts) != 1:
             raise ValueError("AI 未回傳完整審核結果，拒答也不視為通過")
         verdict = validate_verdict(json.loads(texts[0]), question)
-        self.state["cache"][key] = {"verdict": verdict, "model": MODEL, "policy": POLICY_VERSION}
+        self.state["cache"][request["key"]] = {"verdict": verdict, "model": MODEL, "policy": POLICY_VERSION}
         save_state(self.path, self.state)
         return verdict
 
     def filter_questions(self, questions, diagnostics):
-        accepted = []
+        accepted = {}
+        groups = {}
+        for index, question in enumerate(questions):
+            groups.setdefault(cache_key(question), []).append((index, question))
         stopped = False
+        completed = 0
+        last_logged = 0
         def progress(completed):
             print("AI 審題 %d/%d；通過 %d、排除 %d、待審 %d；本次估算 US$%.4f，本月 US$%.4f" % (
                 completed, len(questions), self.stats["accepted"], self.stats["rejected"],
                 self.stats["pending"], self.stats["run_usd"], self.stats["month_usd"]), file=sys.stderr, flush=True)
-        for index, question in enumerate(questions):
-            if index % 10 == 0:
-                progress(index)
+
+        def record_question(index, question, verdict):
             context = dict(source=question["source"], source_url=question["source_url"],
                            text=question["stem"], target=question["answer"])
-            try:
-                # 到預算或 API 失敗後仍可重用快取，不能再發送新請求。
-                cached = cache_key(question) in self.state["cache"]
-                verdict = self.review(question) if cached or not stopped else None
-            except Exception as error:
-                self.stats["error"] = str(error)
-                verdict = None
-                stopped = True
             if verdict is None:
-                stopped = True
                 self.stats["pending"] += 1
                 diagnostics.record("ai_pending", question["kind"], details=self.stats["error"] or "本次或本月預算不足；下次續審", **context)
-                continue
+                return
             options = review_input(question)["options"]
             decisions = {options[item["index"]]: item for item in verdict["options"]}
             pool = [p for p in question["pool"] if decisions[p]["verdict"] == "invalid"]
@@ -270,15 +283,68 @@ class Reviewer:
             if not verdict["question_clear"] or decisions[question["answer"]]["verdict"] != "valid" or len(pool) < 3:
                 self.stats["rejected"] += 1
                 diagnostics.record("ai_rejected", question["kind"], details=verdict["explanation"] + "；" + reasons, **context)
-                continue
+                return
             q = dict(question, pool=pool, ai_review={"model": MODEL, "policy": POLICY_VERSION})
             removed = len(question["pool"]) - len(pool)
             if removed:
                 self.stats["trimmed_options"] += removed
                 diagnostics.record("ai_options_removed", question["kind"], details=reasons, **context)
-            accepted.append(q)
+            accepted[index] = q
             self.stats["accepted"] += 1
+
+        def record_group(key, verdict):
+            nonlocal completed, last_logged
+            if verdict is not None:
+                # 同一可見題目即使來自不同來源，也只付費一次。
+                self.stats["cache_hits"] += len(groups[key]) - 1
+            for index, question in groups[key]:
+                record_question(index, question, verdict)
+                completed += 1
+            if completed // 10 > last_logged // 10:
+                progress(completed)
+                last_logged = completed
+
+        progress(0)
+        queue = list(groups)
+        cursor = 0
+        # 最多三個在途請求；預留、結算、寫快取、診斷全部留在主執行緒。
+        with ThreadPoolExecutor(max_workers=self.workers) as executor:
+            active = {}
+            while cursor < len(queue) or active:
+                while cursor < len(queue) and len(active) < self.workers:
+                    key = queue[cursor]
+                    question = groups[key][0][1]
+                    try:
+                        verdict, request = self._prepare_review(question, allow_request=not stopped)
+                    except Exception as error:
+                        self.stats["error"] = str(error)
+                        stopped = True
+                        verdict, request = None, None
+                    if request is not None:
+                        active[executor.submit(self.transport, request["body"])] = (key, question, request)
+                    elif verdict is not None:
+                        record_group(key, verdict)
+                    elif active and not stopped:
+                        # 在途請求尚未結算，先等預留額釋放，不能過早把後續題目列為待審。
+                        break
+                    else:
+                        stopped = True
+                        record_group(key, None)
+                    cursor += 1
+                if active:
+                    finished, _ = wait(active, return_when=FIRST_COMPLETED)
+                    for future in finished:
+                        key, question, request = active.pop(future)
+                        try:
+                            verdict = self._finish_review(question, request, future.result())
+                        except Exception as error:
+                            self.stats["error"] = str(error)
+                            stopped = True
+                            verdict = None
+                        record_group(key, verdict)
+                    # 出錯後不排新請求；已送出的仍等待完成並保存，避免重付。
         # 無新呼叫時也輸出完整狀態供 CI 保存。
         save_state(self.path, self.state)
-        progress(len(questions))
-        return accepted
+        if last_logged != len(questions):
+            progress(len(questions))
+        return [accepted[index] for index in sorted(accepted)]

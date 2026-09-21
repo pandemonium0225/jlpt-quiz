@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -135,12 +136,95 @@ class ReviewTests(unittest.TestCase):
                 calls.append(body)
                 raise RuntimeError("連線失敗")
             path = Path(directory) / "cache.json"
-            reviewer = a.Reviewer(path, transport=fail)
+            reviewer = a.Reviewer(path, transport=fail, workers=1)
             reviewer.filter_questions([question(), dict(question(), stem="別題")], Diagnostics())
             self.assertEqual(len(calls), 1)
             self.assertEqual(reviewer.stats["pending"], 2)
             self.assertGreater(reviewer.stats["run_usd"], 0)
             self.assertFalse(json.loads(path.read_text())["cache"])
+
+    def test_three_parallel_requests_deduplicate_and_preserve_order_across_month_end(self):
+        qs = [dict(question(), stem="題目%d" % i) for i in range(6)]
+        qs.append(dict(qs[0], pool=list(reversed(qs[0]["pool"]))))
+        with tempfile.TemporaryDirectory() as directory, patch.object(a.time, "strftime", return_value="2026-09") as month:
+            lock = threading.Lock()
+            active = peak = calls = 0
+            def next_month():
+                month.return_value = "2026-10"
+            barrier = threading.Barrier(3, action=next_month)
+            def transport(_body):
+                nonlocal active, peak, calls
+                with lock:
+                    active += 1
+                    peak = max(peak, active)
+                    calls += 1
+                barrier.wait(timeout=3)
+                with lock:
+                    active -= 1
+                return response(verdict(question()))
+            reviewer = a.Reviewer(Path(directory) / "cache.json", run_budget=None, transport=transport)
+            result = reviewer.filter_questions(qs, Diagnostics())
+            self.assertEqual(peak, 3)
+            self.assertEqual(calls, 6)
+            self.assertEqual(reviewer.stats["cache_hits"], 1)
+            self.assertEqual([q["stem"] for q in result], [q["stem"] for q in qs])
+            self.assertAlmostEqual(reviewer.state["months"]["2026-09"], reviewer.stats["run_usd"] / 2)
+            self.assertAlmostEqual(reviewer.state["months"]["2026-10"], reviewer.stats["run_usd"] / 2)
+            saved = json.loads(reviewer.path.read_text())
+            self.assertEqual(len(saved["cache"]), 6)
+            self.assertEqual(saved["months"], reviewer.state["months"])
+
+    def test_parallel_budget_waits_for_reservations_to_settle(self):
+        qs = [dict(question(), stem="題目%d" % i) for i in range(3)]
+        with tempfile.TemporaryDirectory() as directory:
+            balances = []
+            path = Path(directory) / "cache.json"
+            def transport(_body):
+                balances.append(sum(json.loads(path.read_text())["months"].values()))
+                return response(verdict(question()))
+            # 只容得下一個完整預留額；結算後才能送下一題。
+            reviewer = a.Reviewer(path, run_budget=None, month_budget=0.15, transport=transport)
+            self.assertEqual(len(reviewer.filter_questions(qs, Diagnostics())), 3)
+            self.assertEqual(reviewer.stats["calls"], 3)
+            self.assertTrue(all(value <= 0.15 for value in balances))
+            self.assertEqual(reviewer.stats["pending"], 0)
+
+    def test_parallel_failure_keeps_inflight_results_and_stops_new_calls(self):
+        qs = [dict(question(), stem="題目%d" % i) for i in range(8)]
+        barrier = threading.Barrier(3)
+        failure_recorded = threading.Event()
+        class SignalDiagnostics(Diagnostics):
+            def record(self, reason, *args, **kwargs):
+                super().record(reason, *args, **kwargs)
+                if reason == "ai_pending":
+                    failure_recorded.set()
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []
+            def transport(body):
+                stem = json.loads(body["input"][1]["content"])["stem"]
+                calls.append(stem)
+                barrier.wait(timeout=3)
+                if stem == "題目0":
+                    raise RuntimeError("連線失敗")
+                self.assertTrue(failure_recorded.wait(timeout=3))
+                return response(verdict(question()))
+            reviewer = a.Reviewer(Path(directory) / "cache.json", transport=transport)
+            reviewer.state["cache"][a.cache_key(qs[-1])] = {"verdict": verdict(qs[-1])}
+            result = reviewer.filter_questions(qs, SignalDiagnostics())
+            self.assertCountEqual(calls, ["題目0", "題目1", "題目2"])
+            self.assertEqual([q["stem"] for q in result], ["題目1", "題目2", "題目7"])
+            self.assertEqual(reviewer.stats["pending"], 5)
+            self.assertEqual(reviewer.stats["error"], "連線失敗")
+            self.assertEqual(len(json.loads(reviewer.path.read_text())["cache"]), 3)
+
+    def test_missing_usage_keeps_the_reservation_but_saves_complete_verdict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = response(verdict(question()))
+            data["usage"] = None
+            reviewer = a.Reviewer(Path(directory) / "cache.json", transport=lambda _: data)
+            self.assertIsNotNone(reviewer.review(question()))
+            self.assertGreater(reviewer.stats["run_usd"], 0)
+            self.assertIn(a.cache_key(question()), reviewer.state["cache"])
 
     def test_incomplete_or_duplicate_option_results_never_cached(self):
         q = question()
