@@ -180,6 +180,9 @@ def render_markdown(report, limit=30):
                   f"通過 {ai['accepted']}、排除 {ai['rejected']}、待審 {ai['pending']}；移除歧義誘答 {ai['trimmed_options']} 個。",
                   f"本次估計 US${ai['run_usd']:.4f}（{run_limit}）；本月 UTC 累計 US${ai['month_usd']:.4f} / {ai['month_budget_usd']:.2f}。",
                   "金額按程式內價格表估算，失敗請求保守預留；實際帳單以 API 服務為準。", ""]
+        if ai.get("next_month_budget_usd", ai["month_budget_usd"]) != ai["month_budget_usd"]:
+            lines += [f"首輪已完成；後續執行自動恢復月額 US${ai['next_month_budget_usd']:.2f}，累計用量不歸零。",
+                      "若本月已超過恢復後的額度，仍可沿用快取，新增付費審查等下個 UTC 月續跑。", ""]
     elif not ai.get("enabled"):
         lines += ["AI 語意審核未啟用；本次只驗證規則生成及差異報告。", ""]
     lines += ["### 未出題及品質檢查", "", "以下是檢查事件數；同一素材可能涉及不同題型，不等於淘汰題數。", ""]

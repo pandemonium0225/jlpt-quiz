@@ -248,6 +248,61 @@ class ReviewTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 a.Reviewer(path)
 
+    def test_initial_allowance_is_retired_persistently_without_resetting_spend(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cache.json"
+            month = a.time.strftime("%Y-%m", a.time.gmtime())
+            a.save_state(path, {"state_version": 1, "cache": {}, "months": {month: 6.0}})
+            reviewer = a.Reviewer(path, run_budget=None, initial_month_budget=10,
+                                  transport=lambda _: response(verdict(question())))
+            self.assertEqual(reviewer.month_budget, 10)
+            reviewer.filter_questions([question()], Diagnostics())
+            reviewer.stats["calibration_passed"] = len(a.calibration_cases())
+            reviewer.complete_initial_review()
+            spent = reviewer.stats["month_usd"]
+            self.assertGreater(spent, 6)
+            self.assertEqual(reviewer.month_budget, 5)
+            self.assertEqual(reviewer.stats["next_month_budget_usd"], 5)
+            self.assertEqual(reviewer.stats["month_budget_usd"], 10)
+            completed_at = reviewer.state["initial_review_completed_at"]
+            # 下一輪即使仍帶首輪參數，甚至換政策，也不得再取得加額或清掉用量。
+            for policy in (a.POLICY_VERSION, "new-policy"):
+                with patch.object(a, "POLICY_VERSION", policy):
+                    replay = a.Reviewer(path, run_budget=None, initial_month_budget=10,
+                                        transport=lambda _: self.fail("超過恢復後的月額，不可付費"))
+                    self.assertEqual(replay.month_budget, 5)
+                    self.assertEqual(replay.stats["month_usd"], spent)
+                    self.assertEqual(replay.state["initial_review_completed_at"], completed_at)
+                    if policy != "new-policy":
+                        self.assertIsNotNone(replay.review(question()))
+                    self.assertIsNone(replay.review(dict(question(), stem="新題")))
+
+    def test_unfinished_initial_review_keeps_allowance_on_resume(self):
+        for problem in ("pending", "error", "calibration", "empty"):
+            with self.subTest(problem=problem), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "cache.json"
+                reviewer = a.Reviewer(path, initial_month_budget=10)
+                reviewer.stats.update(accepted=1, calibration_passed=len(a.calibration_cases()))
+                reviewer.stats.update({"pending": 1} if problem == "pending" else
+                                      {"error": "逾時"} if problem == "error" else
+                                      {"calibration_passed": 0} if problem == "calibration" else {"accepted": 0})
+                with self.assertRaises(ValueError):
+                    reviewer.complete_initial_review()
+                resumed = a.Reviewer(path, initial_month_budget=10)
+                self.assertEqual(resumed.month_budget, 10)
+                self.assertNotIn("initial_review_completed_at", resumed.state)
+
+    def test_invalid_initial_allowance_or_completion_marker_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cache.json"
+            for budget in (-1, 4, float("nan"), float("inf")):
+                with self.assertRaises(ValueError):
+                    a.Reviewer(path, initial_month_budget=budget)
+            a.save_state(path, {"state_version": 1, "cache": {}, "months": {},
+                                "initial_review_completed_at": False})
+            with self.assertRaises(ValueError):
+                a.Reviewer(path, initial_month_budget=10)
+
     def test_model_calibration_checks_good_and_ambiguous_examples(self):
         def transport(body):
             incoming = json.loads(body["input"][1]["content"])
@@ -271,16 +326,19 @@ class ReviewTests(unittest.TestCase):
             snapshot, out = root / "materials.json", root / "quiz.json"
             snapshot.write_text(json.dumps({"snapshot_version": 1, "grammar": [], "vocab": []}))
             q = dict(question(), id="id", revision="old")
-            reviewer = a.Reviewer(root / "cache.json", run_budget=None,
+            reviewer = a.Reviewer(root / "cache.json", run_budget=None, initial_month_budget=10,
                                   transport=lambda _: response(verdict(q, valid={"を", "から"})))
             reviewer.stats["calibration_passed"] = len(a.calibration_cases())
             with patch.object(b, "build_questions", return_value=[q]), patch.object(b, "Reviewer", return_value=reviewer) as factory, \
                  patch.object(reviewer, "calibrate", return_value=True), patch.dict(b.os.environ, {"OPENAI_API_KEY": "test"}):
                 b.main(["--from-snapshot", str(snapshot), "--output", str(out), "--report-dir", str(root / "report"),
-                        "--ai-review", "--ai-no-run-limit"])
+                        "--ai-review", "--ai-no-run-limit", "--ai-initial-month-budget", "10"])
             self.assertIsNone(factory.call_args.args[1])
             self.assertEqual(factory.call_args.args[2], 5.0)
+            self.assertEqual(factory.call_args.kwargs["initial_month_budget"], 10)
             self.assertIn("單次不限額", (root / "report/report.md").read_text())
+            self.assertIn("自動恢復月額 US$5.00", (root / "report/report.md").read_text())
+            self.assertIn("initial_review_completed_at", json.loads((root / "cache.json").read_text()))
             published = json.loads(out.read_text())["questions"][0]
             self.assertNotIn("から", published["pool"])
             self.assertNotEqual(published["revision"], "old")
@@ -299,6 +357,7 @@ class ReviewTests(unittest.TestCase):
                 b.main(["--from-snapshot", str(snapshot), "--output", str(out), "--report-dir", str(root / "report"), "--ai-review"])
             self.assertFalse(out.exists())
             self.assertNotIn("ready=true", output.read_text())
+            self.assertNotIn("initial_review_completed_at", reviewer.state)
 
     def test_pending_review_keeps_bank_and_workflow_not_ready(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -311,7 +370,9 @@ class ReviewTests(unittest.TestCase):
             snapshot.write_text(json.dumps({"snapshot_version": 1, "grammar": [], "vocab": []}))
             with patch.object(b, "build_questions", return_value=[q]), patch.dict(b.os.environ, {"OPENAI_API_KEY": "test", "GITHUB_OUTPUT": str(output)}):
                 b.main(["--from-snapshot", str(snapshot), "--output", str(out), "--report-dir", str(root / "report"),
-                        "--ai-review", "--ai-run-budget", "0", "--ai-state", str(root / "cache.json")])
+                        "--ai-review", "--ai-run-budget", "0", "--ai-state", str(root / "cache.json"),
+                        "--ai-initial-month-budget", "10"])
             self.assertEqual(out.read_bytes(), original)
             self.assertEqual(output.read_text(), "ready=false\n")
             self.assertEqual(json.loads((root / "report/report.json").read_text())["status"], "pending")
+            self.assertNotIn("initial_review_completed_at", json.loads((root / "cache.json").read_text()))

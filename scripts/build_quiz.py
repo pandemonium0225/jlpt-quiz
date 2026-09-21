@@ -1102,6 +1102,8 @@ def main(argv=()):
                             help="測試期間停用單次金額上限，仍遵守每月預算")
     parser.set_defaults(ai_run_budget=1.0)
     parser.add_argument("--ai-month-budget", type=float, default=5.0, help="本流程每月審題預算，美元（UTC）")
+    parser.add_argument("--ai-initial-month-budget", type=float,
+                        help="首輪全庫審查期間的暫時月額；完成後自動恢復 --ai-month-budget")
     args = parser.parse_args(argv)
     diagnostics = Diagnostics()
     previous, grammar, vocab = None, [], []
@@ -1149,7 +1151,8 @@ def main(argv=()):
         if args.ai_review:
             if not os.environ.get("OPENAI_API_KEY", "").strip():
                 raise ValueError("AI 審題未設定 OPENAI_API_KEY；請設定 GitHub Actions secret")
-            reviewer = Reviewer(args.ai_state, args.ai_run_budget, args.ai_month_budget)
+            reviewer = Reviewer(args.ai_state, args.ai_run_budget, args.ai_month_budget,
+                                initial_month_budget=args.ai_initial_month_budget)
             # 先用既有多解案例與正常題校驗；快取有效時不重複付費。
             if not reviewer.calibrate():
                 reviewer.run_budget = 0  # 尚未校驗完成，只記錄待審，不發新請求。
@@ -1175,6 +1178,8 @@ def main(argv=()):
             raise ValueError(reviewer.stats["error"])
         if not questions:
             raise ValueError("沒有可用題目；請確認 Notion 分享權限、筆記格式及同類選項數量")
+        if reviewer:
+            reviewer.complete_initial_review()
         report = make_report(previous, payload, diagnostics, grammar, baseline)
         report["ai"] = reviewer.stats if reviewer else {"enabled": False}
         write_report(args.report_dir, report)

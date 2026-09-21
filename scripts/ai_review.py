@@ -153,10 +153,15 @@ def call_openai(body):
 
 
 class Reviewer:
-    def __init__(self, state_path, run_budget=1.0, month_budget=5.0, transport=call_openai, workers=3):
+    def __init__(self, state_path, run_budget=1.0, month_budget=5.0, transport=call_openai, workers=3,
+                 initial_month_budget=None):
         budgets = (month_budget,) if run_budget is None else (run_budget, month_budget)
+        if initial_month_budget is not None:
+            budgets += (initial_month_budget,)
         if not all(math.isfinite(x) and x >= 0 for x in budgets):
             raise ValueError("AI 預算必須是非負有限數值")
+        if initial_month_budget is not None and initial_month_budget < month_budget:
+            raise ValueError("首輪月額不可低於平常月額")
         if type(workers) is not int or not 1 <= workers <= 3:
             raise ValueError("AI 同時審題數必須介於 1 至 3")
         self.workers = workers
@@ -167,15 +172,33 @@ class Reviewer:
             raise ValueError("AI 審核快取損壞；停止呼叫以免重複花費")
         if any(not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 for v in self.state["months"].values()):
             raise ValueError("AI 用量紀錄無效")
+        completed_at = self.state.get("initial_review_completed_at")
+        if completed_at is not None and (not isinstance(completed_at, str) or not completed_at):
+            raise ValueError("AI 首輪完成紀錄無效")
         self.month = time.strftime("%Y-%m", time.gmtime())
-        self.run_budget, self.month_budget = run_budget, month_budget
+        self.regular_month_budget = month_budget
+        self.run_budget = run_budget
+        self.month_budget = initial_month_budget if initial_month_budget is not None and not completed_at else month_budget
         self.transport = transport
         self.stats = {"enabled": True, "model": MODEL, "calls": 0, "cache_hits": 0,
                       "calibration_passed": 0, "calibration_total": len(calibration_cases()),
                       "accepted": 0, "rejected": 0, "pending": 0, "trimmed_options": 0,
-                      "run_usd": 0.0, "run_budget_usd": run_budget, "month_budget_usd": month_budget,
+                      "run_usd": 0.0, "run_budget_usd": run_budget, "month_budget_usd": self.month_budget,
+                      "next_month_budget_usd": self.month_budget, "initial_review_completed": bool(completed_at),
                       "month_usd": self.state["months"].get(self.month, 0.0), "error": ""}
         save_state(self.path, self.state)
+
+    def complete_initial_review(self):
+        """全庫審完才收回首輪加額；完成標記及累計用量一起跨執行保存。"""
+        if (self.stats["error"] or self.stats["pending"] or not self.stats["accepted"]
+                or self.stats["calibration_passed"] != self.stats["calibration_total"]):
+            raise ValueError("AI 首輪尚未完成，不能收回首輪月額")
+        if not self.state.get("initial_review_completed_at"):
+            self.state["initial_review_completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            save_state(self.path, self.state)
+        self.month_budget = self.regular_month_budget
+        self.stats["next_month_budget_usd"] = self.month_budget
+        self.stats["initial_review_completed"] = True
 
     def calibrate(self):
         for name, question, expected, clear in calibration_cases():
