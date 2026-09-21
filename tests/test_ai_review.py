@@ -71,6 +71,16 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(a.review_input(question())["visible_context"], "")
         self.assertEqual(a.review_input(dict(question(), label="用法"))["visible_context"], "格助詞　を")
 
+    def test_review_is_blind_to_answer_identity_and_hidden_reference(self):
+        q = question()
+        changed = dict(q, answer="から", pool=["を", "に", "が", "と"], original="電車から降ります。",
+                       source="秘密文法標題", translation="秘密翻譯", note="秘密解說", source_text="秘密原文")
+        self.assertEqual(a.request_body(q), a.request_body(changed))
+        self.assertEqual(a.cache_key(q), a.cache_key(changed))
+        body = json.dumps(a.request_body(changed), ensure_ascii=False)
+        self.assertNotIn("秘密", body)
+        self.assertNotIn("電車から降ります。", body)
+
     def test_zero_budget_never_calls_api_and_reports_pending(self):
         with tempfile.TemporaryDirectory() as directory:
             reviewer = a.Reviewer(Path(directory) / "cache.json", run_budget=0,
