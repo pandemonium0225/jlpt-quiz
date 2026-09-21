@@ -4,3 +4,4 @@ __pycache__/
 *.token
 .DS_Store
 site/quiz.json
+.venv/

@@ -242,6 +242,79 @@ class QuestionTests(unittest.TestCase):
         self.assertNotIn('起点', kara['pool'])
         self.assertTrue({'理由', '材料'} <= set(kara['pool']))
 
+    def test_inflection_pair_questions_need_no_tokenizer(self):
+        grammar = [particle('な形容詞・名詞の中止形「〜で」', [
+            ['な形容詞（けいようし）語幹＋で', '静（しず）かだ → 静（しず）かで'],
+            ['い形容詞（けいようし）＋くて', '高（たか）い → 高（たか）くて'],
+            ['動詞（どうし）て形（けい）', '食（た）べる → 食（た）べて']])]
+        qs = [q for q in b.build_questions([], grammar) if q['label'] == '活用']
+        self.assertEqual(len(qs), 3)
+        q = next(q for q in qs if q['answer'] == '静（しず）かで')
+        # 誘答是把別列的語尾套錯在這個詞上，加上忘了變形的原形
+        self.assertIn('静（しず）かくて', q['pool'])
+        self.assertIn('静（しず）かて', q['pool'])
+        self.assertIn('静（しず）かだ', q['pool'])
+
+    def test_furigana_prefix_keeps_the_reading_with_its_kanji(self):
+        self.assertEqual(b.furigana_prefix('使（つか）う', 1), '使（つか）')
+        self.assertEqual(b.furigana_prefix('話（はな）せる', 2), '話（はな）せ')
+        self.assertEqual(b.furigana_prefix('食（た）べる', 0), '')
+
+    @unittest.skipUnless(b.TAGGER, '未安裝斷詞器')
+    def test_conjugation_uses_the_dictionary_not_a_guess(self):
+        # る 結尾分不出五段／一段，猜錯會生出「見らない」這種不存在的詞
+        self.assertEqual(b.verb_forms('切る', '五段-ラ行')['ない形'], '切らない')
+        self.assertEqual(b.verb_forms('見る', '上一段-マ行')['ない形'], '見ない')
+        self.assertEqual(b.verb_forms('行く', '五段-カ行')['て形'], '行って')   # 音便例外
+        self.assertEqual(b.verb_forms('泳ぐ', '五段-ガ行')['た形'], '泳いだ')
+        self.assertEqual(b.verb_forms('勉強する', 'サ行変格')['て形'], '勉強して')
+        self.assertEqual(b.verb_forms('来る', 'カ行変格')['た形'], '来た')
+        self.assertEqual(b.verb_forms('食べる', '未知の活用'), {})
+
+    @unittest.skipUnless(b.TAGGER, '未安裝斷詞器')
+    def test_verb_chunk_keeps_its_own_kanji_and_compound(self):
+        # lemma 會把「帰る」正規化成「返る」，orthBase 才是這個詞自己的辞書形
+        self.assertEqual(b.verb_chunks('帰る')[0][3], '帰る')
+        # 可能形的 lemma 是「話す」，配上下一段活用型會生出「話て」
+        self.assertEqual(b.verb_chunks('話せるようになる')[0][3], '話せる')
+        # 名詞＋する 是一個複合動詞
+        self.assertIn('メモする', [c[3] for c in b.verb_chunks('忘れないようにメモする')])
+
+    @unittest.skipUnless(b.TAGGER, '未安裝斷詞器')
+    def test_conjugation_target_follows_the_connection_column(self):
+        self.assertEqual(b.conjugation_target('動詞辞書形＋名詞', 'よく使う言葉')[0], '使う')
+        self.assertEqual(b.conjugation_target('動詞た形＋名詞', '昨日使った言葉')[0], '使った')
+        # 例句有三個動詞，「と」限定了是哪一個
+        self.assertEqual(
+            b.conjugation_target('動詞ない形＋と＋いけない', '送ってもらわないといけない')[0],
+            'もらわない')
+        # 接續欄描述的不是動詞形就不出活用題
+        self.assertIsNone(b.conjugation_target('名詞＋を＋他動詞', 'コーヒーを飲む'))
+
+    @unittest.skipUnless(b.TAGGER, '未安裝斷詞器')
+    def test_conjugation_blank_carries_furigana_into_options(self):
+        grammar = [particle('動詞辞書形＋名詞', [
+            ['動詞（どうし）辞書形（じしょけい）＋名詞（めいし）', 'よく使（つか）う言葉（ことば）']])]
+        q = next(q for q in b.build_questions([], grammar) if q['label'] == '活用')
+        self.assertEqual(q['stem'], 'よく［　］言葉（ことば）')
+        self.assertEqual(q['answer'], '使（つか）う')
+        self.assertIn('使（つか）った', q['pool'])
+        self.assertIn('使（つか）わない', q['pool'])
+
+    @unittest.skipUnless(b.TAGGER, '未安裝斷詞器')
+    def test_conjugation_never_offers_a_form_the_note_also_accepts(self):
+        # 筆記把辞書形與た形列在同一則，等於說兩種都能接名詞：
+        # 「よく使った言葉」是對的，不能拿來當錯誤選項。
+        grammar = [particle('動詞辞書形＋名詞', [
+            ['動詞（どうし）辞書形（じしょけい）＋名詞（めいし）', 'よく使（つか）う言葉（ことば）'],
+            ['動詞（どうし）た形（けい）＋名詞（めいし）', '昨日（きのう）使（つか）った言葉（ことば）']])]
+        qs = [q for q in b.build_questions([], grammar) if q['label'] == '活用']
+        self.assertEqual(len(qs), 2)
+        for q in qs:
+            self.assertNotIn('使（つか）う', [o for o in q['pool'] if o != q['answer']])
+            self.assertNotIn('使（つか）った', [o for o in q['pool'] if o != q['answer']])
+            self.assertIn('使（つか）って', q['pool'])
+
     def test_usage_skips_examples_that_match_more_than_one_role(self):
         grammar = [
             particle('格助詞　に', [

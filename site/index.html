@@ -272,7 +272,7 @@ function render(){
   sec.className = 'q';
   sec.innerHTML = `
     <p class="kind">${escapeHtml(q.label)}</p>
-    ${q.kind === 'connect' && q.source ? `<p class="gp" lang="ja">${japanese(q.source)}</p>` : ''}
+    ${q.label === '用法' && q.source ? `<p class="gp" lang="ja">${japanese(q.source)}</p>` : ''}
     <p class="ask">${escapeHtml(q.instruction)}</p>
     <p class="stem" lang="ja">${japanese(q.stem)}</p>
     <ul class="opts">
@@ -291,7 +291,7 @@ function render(){
       ${q.translation ? `<p><span class="lab">翻譯</span>${escapeHtml(q.translation)}</p>` : ''}
       ${noteLines(q).map(line =>
         `<p${/不代表|不宣稱/.test(line) ? ' class="caveat"' : ''}>${japanese(line)}</p>`).join('')}
-      ${q.source && q.kind !== 'connect' ? `<p><span class="lab">來源</span><span lang="ja">${japanese(q.source)}</span></p>` : ''}
+      ${q.source && q.label !== '用法' ? `<p><span class="lab">來源</span><span lang="ja">${japanese(q.source)}</span></p>` : ''}
       ${/^https:\/\/www\.notion\.so\/[a-f0-9]{32}(#[a-f0-9]{32})?$/.test(q.source_url || '') ? `<p><a href="${escapeHtml(q.source_url)}" target="_blank" rel="noopener noreferrer">開啟 Notion 筆記</a></p>` : ''}
     </div>`;
   quiz.appendChild(sec);
