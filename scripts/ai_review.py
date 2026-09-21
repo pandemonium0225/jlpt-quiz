@@ -188,6 +188,9 @@ class Reviewer:
         return True
 
     def review(self, question):
+        # 長時間執行可能跨 UTC 月底；各請求按開始月份預留與結算。
+        self.month = time.strftime("%Y-%m", time.gmtime())
+        self.stats["month_usd"] = self.state["months"].get(self.month, 0.0)
         key = cache_key(question)
         cached = self.state["cache"].get(key)
         if cached:

@@ -115,6 +115,19 @@ class ReviewTests(unittest.TestCase):
             self.assertIsNone(reviewer.stats["run_budget_usd"])
             json.dumps(reviewer.stats, allow_nan=False)
 
+    def test_long_run_charges_each_request_to_its_utc_start_month(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(a.time, "strftime", return_value="2026-09") as month:
+            reviewer = a.Reviewer(Path(directory) / "cache.json", run_budget=None,
+                                  transport=lambda _: response(verdict(question())))
+            reviewer.review(question())
+            september = reviewer.stats["month_usd"]
+            month.return_value = "2026-10"
+            reviewer.review(dict(question(), stem="別題"))
+            self.assertEqual(reviewer.state["months"]["2026-09"], september)
+            self.assertAlmostEqual(reviewer.state["months"]["2026-10"], september)
+            self.assertAlmostEqual(reviewer.stats["month_usd"], september)
+            self.assertAlmostEqual(reviewer.stats["run_usd"], september * 2)
+
     def test_api_failure_reserves_budget_and_stops_remaining_calls(self):
         with tempfile.TemporaryDirectory() as directory:
             calls = []
