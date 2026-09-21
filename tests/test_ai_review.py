@@ -100,6 +100,21 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(second.stats["pending"], 1)
             self.assertEqual(second.stats["month_usd"], spent)
 
+    def test_disabled_run_limit_can_pass_one_dollar_but_still_stops_at_month_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            def transport(_body):
+                data = response(verdict(question()))
+                data["usage"]["output_tokens"] = 5000
+                return data
+            reviewer = a.Reviewer(Path(directory) / "cache.json", run_budget=None,
+                                  month_budget=1.3, transport=transport)
+            results = [reviewer.review(dict(question(), stem="題目%d" % i)) for i in range(30)]
+            self.assertGreater(reviewer.stats["run_usd"], 1.0)
+            self.assertLessEqual(reviewer.stats["month_usd"], 1.3)
+            self.assertIn(None, results)
+            self.assertIsNone(reviewer.stats["run_budget_usd"])
+            json.dumps(reviewer.stats, allow_nan=False)
+
     def test_api_failure_reserves_budget_and_stops_remaining_calls(self):
         with tempfile.TemporaryDirectory() as directory:
             calls = []
@@ -145,8 +160,8 @@ class ReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             reviewer = a.Reviewer(Path(directory) / "cache.json", transport=transport)
             self.assertTrue(reviewer.calibrate())
-            self.assertEqual(reviewer.stats["calibration_passed"], 5)
-            self.assertEqual(reviewer.stats["calls"], 5)
+            self.assertEqual(reviewer.stats["calibration_passed"], len(a.calibration_cases()))
+            self.assertEqual(reviewer.stats["calls"], len(a.calibration_cases()))
         with tempfile.TemporaryDirectory() as directory:
             # 模型只認原句、錯把「から」排除，不能通過校驗。
             bad = a.Reviewer(Path(directory) / "cache.json", transport=lambda _: response(verdict(a.calibration_cases()[0][1])))
@@ -159,11 +174,16 @@ class ReviewTests(unittest.TestCase):
             snapshot, out = root / "materials.json", root / "quiz.json"
             snapshot.write_text(json.dumps({"snapshot_version": 1, "grammar": [], "vocab": []}))
             q = dict(question(), id="id", revision="old")
-            reviewer = a.Reviewer(root / "cache.json", transport=lambda _: response(verdict(q, valid={"を", "から"})))
-            reviewer.stats["calibration_passed"] = 5
-            with patch.object(b, "build_questions", return_value=[q]), patch.object(b, "Reviewer", return_value=reviewer), \
+            reviewer = a.Reviewer(root / "cache.json", run_budget=None,
+                                  transport=lambda _: response(verdict(q, valid={"を", "から"})))
+            reviewer.stats["calibration_passed"] = len(a.calibration_cases())
+            with patch.object(b, "build_questions", return_value=[q]), patch.object(b, "Reviewer", return_value=reviewer) as factory, \
                  patch.object(reviewer, "calibrate", return_value=True), patch.dict(b.os.environ, {"OPENAI_API_KEY": "test"}):
-                b.main(["--from-snapshot", str(snapshot), "--output", str(out), "--report-dir", str(root / "report"), "--ai-review"])
+                b.main(["--from-snapshot", str(snapshot), "--output", str(out), "--report-dir", str(root / "report"),
+                        "--ai-review", "--ai-no-run-limit"])
+            self.assertIsNone(factory.call_args.args[1])
+            self.assertEqual(factory.call_args.args[2], 5.0)
+            self.assertIn("單次不限額", (root / "report/report.md").read_text())
             published = json.loads(out.read_text())["questions"][0]
             self.assertNotIn("から", published["pool"])
             self.assertNotEqual(published["revision"], "old")

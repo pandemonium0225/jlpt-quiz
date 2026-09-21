@@ -1096,7 +1096,11 @@ def main(argv=()):
     parser.add_argument("--from-snapshot", help="離線重播先前的 materials.json，不呼叫 Notion")
     parser.add_argument("--ai-review", action="store_true", help="啟用有預算限制的 OpenAI 語意審題")
     parser.add_argument("--ai-state", default=".build/ai-state/cache.json", help="AI 審題快取及用量紀錄")
-    parser.add_argument("--ai-run-budget", type=float, default=1.0, help="單次審題預算，美元")
+    run_budget = parser.add_mutually_exclusive_group()
+    run_budget.add_argument("--ai-run-budget", type=float, help="單次審題預算，美元（預設 1）")
+    run_budget.add_argument("--ai-no-run-limit", dest="ai_run_budget", action="store_const", const=None,
+                            help="測試期間停用單次金額上限，仍遵守每月預算")
+    parser.set_defaults(ai_run_budget=1.0)
     parser.add_argument("--ai-month-budget", type=float, default=5.0, help="本流程每月審題預算，美元（UTC）")
     args = parser.parse_args(argv)
     diagnostics = Diagnostics()

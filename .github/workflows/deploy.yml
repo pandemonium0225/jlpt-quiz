@@ -90,6 +90,7 @@ jobs:
           --previous .build/baseline/quiz.json
           --baseline-info .build/baseline-info.json
           --ai-review
+          --ai-no-run-limit
 
       - name: Write review summary
         if: always()

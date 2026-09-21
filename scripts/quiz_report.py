@@ -172,11 +172,13 @@ def render_markdown(report, limit=30):
         lines += ["本次未完成可發布的題庫，保留現有網站；不把尚未完成的結果列為題目消失。", ""]
     ai = report.get("ai", {})
     if ai.get("enabled") and "calls" in ai:
+        run_limit = ("單次不限額" if ai["run_budget_usd"] is None
+                     else "上限 US$%.2f" % ai["run_budget_usd"])
         lines += ["### AI 語意審核", "",
                   f"模型 {safe_text(ai['model'])}；呼叫 {ai['calls']} 次，沿用快取 {ai['cache_hits']} 題。",
                   f"已知案例校驗 {ai['calibration_passed']} / {ai['calibration_total']}；未全數通過不發布。",
                   f"通過 {ai['accepted']}、排除 {ai['rejected']}、待審 {ai['pending']}；移除歧義誘答 {ai['trimmed_options']} 個。",
-                  f"本次估計 US${ai['run_usd']:.4f} / {ai['run_budget_usd']:.2f}；本月 UTC 累計 US${ai['month_usd']:.4f} / {ai['month_budget_usd']:.2f}。",
+                  f"本次估計 US${ai['run_usd']:.4f}（{run_limit}）；本月 UTC 累計 US${ai['month_usd']:.4f} / {ai['month_budget_usd']:.2f}。",
                   "金額按程式內價格表估算，失敗請求保守預留；實際帳單以 API 服務為準。", ""]
     elif not ai.get("enabled"):
         lines += ["AI 語意審核未啟用；本次只驗證規則生成及差異報告。", ""]
