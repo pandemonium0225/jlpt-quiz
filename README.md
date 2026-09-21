@@ -1,7 +1,7 @@
 # 日文測驗自動產生器
 
 從 Notion 的「日文文章」與「日文文法」頁面自動生成日文筆記複習測驗，
-用 GitHub Actions 每天重建、部署到 GitHub Pages。全程免費。
+用 GitHub Actions 每天重建、部署到 GitHub Pages。網站維持靜態託管；AI 語意審題使用 OpenAI API，按用量計費。
 
 ---
 
@@ -41,6 +41,7 @@ Repo → **Settings → Secrets and variables → Actions**
 | Name | Value |
 |---|---|
 | `NOTION_TOKEN` | 第一步複製的 integration secret |
+| `OPENAI_API_KEY` | 用於題庫審核的 OpenAI API key，建議使用獨立專案 |
 
 **Variables 分頁** → New repository variable：
 
@@ -74,7 +75,7 @@ Repo → **Actions** → 左側選 `Build and deploy quiz` → **Run workflow**�
 
 每次重建都重新讀取 Notion，完整取代題庫；新增、修改與刪除筆記會在下次成功重建後反映，沒有寫死的題目或舊題追加清單。段落、清單、toggle、callout 中的巢狀文字也會讀取；目前不解析 Notion 資料庫的列頁面。
 
-題目依筆記原句核對答案，屬於筆記複習，不保證每個誘答在所有日文語境下都不成立。無 AI 模型、無付費 API，生成器維持 Python 標準函式庫即可執行。
+題目先依筆記原句及規則生成候選，再由 AI 檢查題意與全部選項。AI 會移除同樣成立或無法確認錯誤的誘答，可靠誘答不足三個就不發布該題。原句與答案不由 AI 改寫。這仍是筆記複習，AI 審核無法保證完全沒有語意歧義。API 呼叫使用 Python 標準函式庫。
 
 幾個會影響生成結果的細節：
 
@@ -106,11 +107,53 @@ Repo → **Actions** → 左側選 `Build and deploy quiz` → **Run workflow**�
 ```powershell
 python -m unittest discover -s tests -v
 node --test tests/test_ui.cjs
-python scripts/build_quiz.py
+python scripts/build_quiz.py --ai-review
 python -m http.server 8000 --bind 127.0.0.1 --directory site
 ```
 
 開啟 <http://127.0.0.1:8000>。前兩項測試不需 Notion 連線，CI 也會先跑測試再生成題庫。若讀取或出題失敗，不會覆寫本機既有題庫，CI 也不會部署空資料。
+
+## 自動審題、更新報告與費用
+
+每天與手動更新共用同一流程：讀取筆記 → 規則生成候選 → AI 校驗及審題 → 比較已發布題庫 → 報告 → 部署。
+AI 尚未審完時，Actions 可以成功結束，但 deploy 會略過，網站維持原版；報告狀態為 `pending`。
+API 錯誤、損壞的基準、模型未通過校驗或整份題庫被排除時，流程失敗且不部署。只有 `ready=true` 才會發布。
+
+預設模型是 **GPT-5.6 Terra**，`medium` reasoning，每題最多 2,400 輸出 tokens（含推理）。
+單次審核預算 **US$1**，本流程 UTC 月累計 **US$5**；首次全題庫審核會分批續跑，直到所有候選都有結果才發布。
+每個候選的全部選項一次審查，只留下模型判定可明確排除的誘答；不串接多家投票、不自動升級模型、不自動重試失敗請求。
+五個校驗案例涵蓋已知多解、正確活用及題意不清；未通過就停止發布。校驗也計費且使用相同快取。
+
+模型、提示、輸出結構或題幹／選項／參考原文變動時重審；只改選項順序不重審。
+快取同時保存通過及被排除的判定，因此壞題不會每天付費重審。變更審題政策時需更新 `scripts/ai_review.py` 的提示或 `POLICY_VERSION`。
+
+按 2026-09-21 的[官方價格](https://developers.openai.com/api/docs/pricing)（每百萬輸入 US$2、輸出 US$12），
+若每題包含提示共用 1,500 輸入與 1,000 輸出 tokens，187 題約 US$2.81，另加校驗案例；變更 10 題約 US$0.15。
+這是估算，實際取決於推理及輸出長度。程式先按輸入 bytes 加餘量及最大輸出預留費用，再依回傳用量調整；逾時或用量缺失時保留預留額。
+價格變動需同步更新程式中的價格表。可用 `--ai-run-budget`、`--ai-month-budget` 調整本機預算；0 代表只用現有快取。
+
+**另請在 OpenAI 專用專案的 Limits → Spend 設每月 US$5，並啟用 Enforce a hard limit。**
+本機與 CI 不共享帳本；artifact 遺失、過期、人工取消或極端中斷可能使程式端紀錄不完整，因此程式估算不能取代平台限制。
+平台硬上限的執行也可能略有延遲，詳見[官方 spend limits 文件](https://developers.openai.com/api/docs/guides/spend-limits)。
+
+Actions 的 Summary 顯示新增、消失、修改、未變的題數、選項前後差異、未出題原因及 AI 用量。
+完整資料在 `quiz-review-<attempt>` artifact（保存 30 天）：
+
+- `report.md`／`report.json`：摘要與全部診斷，附來源連結。事件數不等於淘汰題數，同一素材可能涉及多種題型。
+- `materials.json`：已解析的筆記素材，可離線重播；不含 API 金鑰，但包含筆記內容。
+
+`quiz-baseline-<attempt>` 只在成功部署後保存題庫，供下次比較；AI 快取和用量由 `quiz-ai-state-<attempt>` 保存，待審或失敗的執行也會保留（皆保存 90 天）。
+找不到基準時會明確提示，不把整份題庫誤報為新增。來源區塊及考點用於追蹤題目；重建 Notion 區塊可能呈現為新增／消失。
+更新流程不會回寫 Notion，也不會寄送通知或訊息。
+
+下載素材後可離線檢查生成與報告（不加 `--ai-review` 就不呼叫付費 API；輸出另存以免取代已審題庫）：
+
+```sh
+python scripts/build_quiz.py --from-snapshot materials.json --output .build/replay/quiz.json --previous site/quiz.json --report-dir .build/replay/report
+node --test tests/*.cjs
+```
+
+要連同 AI 續審，加入 `--ai-review --ai-state .build/ai-state/cache.json`。金鑰只放本機 `.env` 或 GitHub Actions secret，不能放進素材或題庫。
 
 ## 排錯
 

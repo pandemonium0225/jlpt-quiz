@@ -65,6 +65,20 @@ parser 已對照實際 Notion 結構修正過；之後改規則前，先看下�
 
 ## 出題規則
 
+### 2026-09-21 更新（診斷、差異與 AI 審題）
+
+使用者要求每次更新自動檢查，並希望由 AI 判斷日文語意，同時控制費用。此段及 README 優先於下方「無 AI／零付費 API」舊記錄。
+
+- `scripts/quiz_report.py` 保存未出題原因、來源、文法覆蓋及題庫差異；`materials.json` 可離線重播。
+- `scripts/ai_review.py` 使用 OpenAI Responses API，預設 `gpt-5.6-terra`、medium reasoning。單次預算 US$1、UTC 每月 US$5；另應設定平台專案硬上限。
+- AI 逐一判斷整個選項池，保留明確錯誤的誘答；正解不成立、題意不清或不足三個可靠誘答就排除。原句、答案不改寫。
+- 五個已知日文案例先校驗模型；尚未全部通過不得發布。結果以模型／提示／內容雜湊快取；包含被排除的結果，避免重複計費。
+- 審核未完成時保存快取、狀態 pending，保留現有網站；API 失敗不得降級成規則題直接發布。
+- Actions 成功部署後才保存 baseline artifact；AI cache artifact 也從失敗／待審執行恢復。沒有基準明確報告，損壞的基準則停止。
+- `を／から` 起點重疊已加入需接續表與同一例子佐證的排除規則；不全面禁止兩者同組。
+- 金鑰：`OPENAI_API_KEY` 只放 `.env` 或 Actions secret，禁止讀出／列印。測試 API 以 mock 執行；未提供金鑰前不宣稱已實測模型品質。
+- 驗證：`python -m unittest discover -s tests -v`、`node --test tests/*.cjs`。
+
 ### 2026-09-19 更新（目前實作，以此段與 README 為準）
 
 使用者要求改善難讀的題目、標點與依 Notion 內容動態出題，並確認保留每天同步及手動重建。

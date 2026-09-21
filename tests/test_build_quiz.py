@@ -365,12 +365,13 @@ class QuestionTests(unittest.TestCase):
     def test_failed_build_preserves_existing_bank(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / 'quiz.json'
-            out.write_text('previous', encoding='utf-8')
+            previous = json.dumps({'schema_version': 2, 'questions': b.build_questions(self.vocab(), [])})
+            out.write_text(previous, encoding='utf-8')
             with patch.multiple(b, TOKEN='test', ARTICLES_ID='articles', GRAMMAR_ID='grammar', OUT=str(out)), \
                  patch.object(b, 'collect_vocab', return_value=[]), patch.object(b, 'collect_grammar', return_value=[]):
                 with self.assertRaises(SystemExit):
-                    b.main()
-            self.assertEqual(out.read_text(encoding='utf-8'), 'previous')
+                    b.main(['--report-dir', str(Path(directory) / 'report')])
+            self.assertEqual(out.read_text(encoding='utf-8'), previous)
 
 
 if __name__ == '__main__':

@@ -14,17 +14,27 @@
   NOTION_TOKEN      Notion internal integration token
   ARTICLES_PAGE_ID  「日文文章」父頁面 ID
   GRAMMAR_PAGE_ID   「日文文法」頁面 ID
+  OPENAI_API_KEY    --ai-review 使用的 OpenAI API key
 """
 
+import argparse
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
+
+if __package__:
+    from .quiz_report import Diagnostics, diagnose, make_report, read_bank, revision, write_report
+    from .ai_review import Reviewer
+else:
+    from quiz_report import Diagnostics, diagnose, make_report, read_bank, revision, write_report
+    from ai_review import Reviewer
 
 API = "https://api.notion.com/v1"
 VERSION = "2022-06-28"
@@ -176,7 +186,7 @@ def is_marked(token):
     return bool(a.get("bold")) or a.get("color", "default") != "default"
 
 
-def marked_terms(rich, grammar=False):
+def marked_terms(rich, grammar=False, diagnostics=None, **context):
     """抽出連續的標記片段，過濾掉時間戳之類的雜訊。"""
     terms, buf = [], ""
     for t in rich:
@@ -194,15 +204,19 @@ def marked_terms(rich, grammar=False):
         term = normalize_text(term).strip(" 、。，,。！？：:；;")
         # 先判斷原字串：「00:00:00 –> 00:00:35」若先切掉開頭時間戳，剩下的殘片會漏網
         if NOISE.match(term):
+            diagnose(diagnostics, "mark_noise", "grammar" if grammar else "vocab", target=term, **context)
             continue
         term = TIMESTAMP.sub("", term).strip()
         if not term or NOISE.match(term) or DIGIT.search(term) or re.search(r"[〜～＋→：:]", term):
+            diagnose(diagnostics, "mark_noise", "grammar" if grammar else "vocab", target=term, **context)
             continue
         plain = surface(term)
         if (len(plain) < 2 and not grammar) or not balanced(term) or re.search(r"[。！？\n]", term):
+            diagnose(diagnostics, "mark_fragment", "grammar" if grammar else "vocab", target=term, **context)
             continue
         if not grammar and len(plain) <= 3 and KANA_ONLY.match(plain):
             # 純假名的短片段多半是文法碎片（きゃ／のって／ずつ），不是詞彙
+            diagnose(diagnostics, "short_kana", "vocab", target=term, **context)
             continue
         clean.append(term)
     return clean
@@ -300,7 +314,7 @@ def sentence_with(text, term, *, punctuated=False):
 # --------------------------------------------------------------------------
 # 解析：日文文章（父頁面下的所有子頁面）
 # --------------------------------------------------------------------------
-def collect_vocab(parent_id, skip_ids):
+def collect_vocab(parent_id, skip_ids, diagnostics=None):
     """回傳 [{term, sentence, hint, source}]"""
     items = []
     skip = {s.replace("-", "") for s in skip_ids}
@@ -325,7 +339,9 @@ def collect_vocab(parent_id, skip_ids):
             if kind not in TEXT_BLOCKS:
                 continue
             rich = block_rich(b)
-            terms = marked_terms(rich)
+            source_url = "https://www.notion.so/" + page_id.replace("-", "") + "#" + b["id"].replace("-", "")
+            context = dict(source=title, source_url=source_url, text=block_text(b))
+            terms = marked_terms(rich, diagnostics=diagnostics, **context)
             if not terms:
                 continue
             para = block_text(b)
@@ -346,13 +362,16 @@ def collect_vocab(parent_id, skip_ids):
             for term in terms:
                 sent = sentence_with(prepared, term, punctuated=True)
                 if not sent or sent.count(term) != 1:
+                    diagnose(diagnostics, "sentence_missing", "vocab", target=term, **context)
                     continue
-                context = surface(sent.replace(term, "", 1))
+                remainder = surface(sent.replace(term, "", 1))
                 # 詞條＋中文解釋、補充說明標籤不是日文例句。
-                if len(re.findall(r"[ぁ-んァ-ヴ]", context)) < 3 or "：" in context:
+                if len(re.findall(r"[ぁ-んァ-ヴ]", remainder)) < 3 or "：" in remainder:
+                    diagnose(diagnostics, "context_missing", "vocab", target=term, **context)
                     continue
                 # 整行都被標記（標題、目錄）挖空後沒有語境，無法作答
                 if not sent.replace(term, "", 1).strip(" 　。、！？?!「」『』"):
+                    diagnose(diagnostics, "context_missing", "vocab", target=term, **context)
                     continue
                 items.append({
                     "term": term,
@@ -361,7 +380,8 @@ def collect_vocab(parent_id, skip_ids):
                     "punctuation_restored": prepared != strip_ts(para),
                     "hint": hint,
                     "source": title,
-                    "source_url": "https://www.notion.so/" + page_id.replace("-", "") + "#" + b["id"].replace("-", ""),
+                    "source_url": source_url,
+                    "origin_key": b["id"].replace("-", "") + ":mark:" + surface(term),
                 })
     visit(parent_id, "日文文章", parent_id)
     return items
@@ -377,7 +397,7 @@ def clean_title(name):
     return head or name.strip()
 
 
-def collect_grammar(page_id, _pages=None):
+def collect_grammar(page_id, _pages=None, diagnostics=None):
     """回傳 [{title, rules:[(接続, 例)], examples:[(日文, 中文)]}]"""
     pages = set() if _pages is None else _pages
     key = page_id.replace("-", "")
@@ -399,7 +419,7 @@ def collect_grammar(page_id, _pages=None):
     for b in walk(page_id, set()):
         t = b.get("type")
         if t == "child_page":
-            entries.extend(collect_grammar(b["id"], pages))
+            entries.extend(collect_grammar(b["id"], pages, diagnostics))
             continue
 
         is_heading = bool(t) and t.startswith("heading_")
@@ -411,6 +431,7 @@ def collect_grammar(page_id, _pages=None):
             if not name:
                 continue
             cur = {"title": name, "rules": [], "examples": [], "targets": {}, "source_texts": {},
+                   "example_ids": {}, "rule_ids": [],
                    "source_url": "https://www.notion.so/" + page_id.replace("-", "") + "#" + b["id"].replace("-", "")}
             entries.append(cur)
             section = ""
@@ -437,21 +458,28 @@ def collect_grammar(page_id, _pages=None):
                     continue
                 cells = r["table_row"]["cells"]
                 if len(cells) < 2:
+                    diagnose(diagnostics, "rule_incomplete", "connect", source=cur["title"], source_url=cur["source_url"])
                     continue
                 left = rt_plain(cells[0]).strip()
                 right = rt_plain(cells[1]).strip()
                 if left and right:
                     cur["rules"].append([left, right])
+                    cur["rule_ids"].append(r.get("id", b["id"] + ":" + str(idx)).replace("-", ""))
+                else:
+                    diagnose(diagnostics, "rule_incomplete", "connect", source=cur["title"],
+                             source_url=cur["source_url"], text=left + " | " + right)
             continue
 
         if section == "examples":
             if t in TEXT_BLOCKS:
                 jp = block_text(b).strip()
                 if jp and re.search(r"[ぁ-んァ-ヴ]", FURIGANA.sub("", jp)):
-                    targets = marked_terms(block_rich(b), grammar=True)
+                    targets = marked_terms(block_rich(b), grammar=True, diagnostics=diagnostics,
+                                           source=cur["title"], source_url=cur["source_url"], text=jp)
                     prepared = restore_punctuation(jp, protected=targets)
                     cur["examples"].append([prepared, ""])
                     cur["targets"][prepared] = targets
+                    cur["example_ids"][prepared] = b["id"].replace("-", "")
                     if prepared != strip_ts(jp):
                         cur["source_texts"][prepared] = "".join(
                             token.get("plain_text", token.get("text", {}).get("content", ""))
@@ -461,6 +489,9 @@ def collect_grammar(page_id, _pages=None):
                 if zh and not cur["examples"][-1][1]:
                     cur["examples"][-1][1] = zh
 
+    for e in entries:
+        if not e["rules"] and not e["examples"]:
+            diagnose(diagnostics, "empty_grammar", "grammar", source=e["title"], source_url=e["source_url"])
     return [e for e in entries if e["rules"] or e["examples"]]
 
 
@@ -781,14 +812,44 @@ def short_key_supported(jp, key, rules):
     return False
 
 
-def build_questions(vocab, grammar):
+def departure_alternatives(stem, answer, rules):
+    """僅在筆記明記起點、且同一例子的前接詞與動詞相符時排除 を／から。"""
+    answer = surface(answer)
+    if answer not in {"を", "から"}:
+        return set()
+
+    def signature(text):
+        text = surface(text).rstrip("。！？")
+        if TAGGER:
+            words = list(TAGGER(text))
+            if words and words[0].feature.pos1 == "動詞" and all(
+                    w.feature.pos1 == "助動詞" for w in words[1:]):
+                return words[0].feature.orthBase
+        return text
+
+    left, right = surface(stem).split(surface(BLANK))
+    for rule, example in rules:
+        role = usage_role(rule) or ""
+        hit = blank_sentence(example, [answer])
+        if "起点" not in role or not hit:
+            continue
+        other_left, other_right = surface(hit[0]).split(surface(BLANK))
+        if left == other_left and signature(right) == signature(other_right):
+            return {"を", "から"} - {answer}
+    return set()
+
+
+def build_questions(vocab, grammar, diagnostics=None):
     qs = []
     instruction = "依 Notion 筆記的原句，選出填入［　］的內容。"
 
     def add(kind, label, stem, answer, pool, source, original, translation="", note="",
-            source_url="", source_text="", ask=""):
+            source_url="", source_text="", ask="", origin="", basis=""):
         pool = unique_options(pool, answer)
         if len(pool) < 3 or not balanced(stem):
+            diagnose(diagnostics, "insufficient_options" if len(pool) < 3 else "invalid_stem", kind,
+                     source=source, source_url=source_url, text=stem, target=answer,
+                     details="可用誘答 %d 個" % len(pool))
             return
         qs.append({
             "kind": kind, "label": label, "instruction": ask or instruction,
@@ -796,13 +857,24 @@ def build_questions(vocab, grammar):
             "source": source, "source_url": source_url,
             "original": original, "translation": translation, "note": note,
             "punctuation_restored": bool(source_text), "source_text": source_text,
+            "origin_key": label + ":" + (origin or source_url + "|" + surface(stem)),
+            "basis": basis,
         })
+
+    def context(g, text="", target=""):
+        return dict(source=g["title"], source_url=g.get("source_url", ""), text=text, target=target)
+
+    def rule_origin(g, example):
+        index = next(i for i, (_, ex) in enumerate(g["rules"]) if ex == example)
+        return g.get("rule_ids", [])[index] if g.get("rule_ids") else g.get("source_url", g["title"]) + ":rule:" + str(index)
 
     # 不以字數相近代替詞形相近，也不為湊四選一混入未知詞形。
     for v in vocab:
         hit = blank_sentence(v["sentence"], [v["term"]])
         form = word_form(v["term"])
         if not hit or not form:
+            diagnose(diagnostics, "blank_unavailable" if not hit else "unknown_word_form", "vocab",
+                     source=v["source"], source_url=v.get("source_url", ""), text=v["sentence"], target=v["term"])
             continue
         peers = [w for w in vocab if word_form(w["term"]) == form
                  and abs(len(surface(w["term"])) - len(surface(v["term"]))) <= max(2, len(surface(v["term"])) // 2)
@@ -815,7 +887,7 @@ def build_questions(vocab, grammar):
         add("vocab", "語彙", hit[0], hit[1], [w["term"] for w in peers],
             v["source"], v["sentence"], v.get("hint", ""),
             "答案依據筆記原句；其他表達是否可用，仍需依語境判斷。", v.get("source_url", ""),
-            v.get("source_text", ""))
+            v.get("source_text", ""), origin=v.get("origin_key", ""), basis="marked_term")
 
     # 優先讀取例句標記；未標記時才從標題推導，且需唯一且完整的命中。
     blanks = []
@@ -826,11 +898,17 @@ def build_questions(vocab, grammar):
             hit = blank_sentence(jp, keys)
             if hit and (marked or short_key_supported(jp, hit[1], g["rules"])):
                 blanks.append((g, hit[0], hit[1], jp, zh))
+            else:
+                reason = "grammar_target_missing" if not keys else "blank_unavailable" if not hit else "short_key_unsupported"
+                diagnose(diagnostics, reason, "grammar", **context(g, jp, "／".join(keys)))
 
     # 挖空後句子完全相同、正解卻不同（と／や、から／より 的對照例句），空格有兩個正解，整組捨棄
     answers_by_stem = {}
     for _g, stem, ans, _jp, _zh in blanks:
         answers_by_stem.setdefault(surface(stem), set()).add(surface(ans))
+    for g, stem, ans, jp, _zh in blanks:
+        if len(answers_by_stem[surface(stem)]) > 1:
+            diagnose(diagnostics, "answer_conflict", "grammar", **context(g, jp, ans))
     blanks = [b for b in blanks if len(answers_by_stem[surface(b[1])]) == 1]
 
     # 只有實際成功挖過空的關鍵字才可當誘答（避免「名詞」這類從標題誤推的字）
@@ -842,15 +920,22 @@ def build_questions(vocab, grammar):
         cat = grammar_family(g)
         # 同類別的誘答；無法分類的文法點不任意互為誘答。
         peers = [h for h in grammar if h is not g and id(h) in proven and grammar_family(h) == cat]
-        pool = list(proven[id(g)] - {ans}) + [k for h in peers for k in sorted(proven[id(h)])]
+        pool = sorted(proven[id(g)] - {ans}) + [k for h in peers for k in sorted(proven[id(h)])]
         pool = list(dict.fromkeys(k for k in pool if k != ans))
         # 常見可互換助詞不可互當錯誤選項；其他歧義仍以原句複習的指示限定。
         alternatives = ({"に", "へ"}, {"と", "や"}, {"から", "より"}, {"が", "の"})
         excluded = set().union(*(group for group in alternatives if surface(ans) in group))
+        contextual = departure_alternatives(stem, ans, g["rules"])
+        removed = sorted(k for k in pool if surface(k) in contextual)
+        if removed:
+            diagnose(diagnostics, "known_alternative", "grammar", details="排除：" + "／".join(removed), **context(g, stem, ans))
+        excluded |= contextual
         pool = [k for k in pool if surface(k) not in excluded]
         add("grammar", "文法", stem, ans, pool, g["title"], jp, zh,
             "文法點：" + g["title"] + "\n答案依據筆記原句，不代表其他表達在所有語境下都錯誤。",
-            g.get("source_url", ""), g.get("source_texts", {}).get(jp, ""))
+            g.get("source_url", ""), g.get("source_texts", {}).get(jp, ""),
+            origin=g.get("example_ids", {}).get(jp, ""),
+            basis="marked_grammar" if g.get("targets", {}).get(jp) else "title_derived")
 
     # --- 用法辨識 ---
     # 問「這個助詞在這句表示什麼」，而不是「這個例子對應接續表的哪一列」：
@@ -859,6 +944,8 @@ def build_questions(vocab, grammar):
     for g in grammar:
         rows = usable[id(g)]
         if len(rows) < 2:
+            if g["rules"]:
+                diagnose(diagnostics, "usage_unavailable", "connect", **context(g))
             continue
         cat = category(g["title"])
         keys = derive_keys(g["title"])
@@ -877,6 +964,7 @@ def build_questions(vocab, grammar):
             elsewhere = {surface(r) for h in grammar for r, e in usable[id(h)]
                          if surface(e) == surface(ex)}
             if len(elsewhere) != 1:
+                diagnose(diagnostics, "usage_conflict", "connect", **context(g, ex, role))
                 continue
             # 同一個助詞的其他用法才是真正會混淆的誘答；不足三個才向外借。
             pool = [r for r, _ in rows if r != role]
@@ -890,7 +978,7 @@ def build_questions(vocab, grammar):
                 pool += safe[:3 - len(pool)]
             add("connect", "用法", ex, role, pool, g["title"], ex, ask=ask,
                 note="筆記記載的接續：" + next(r for r, e in g["rules"] if e == ex),
-                source_url=g.get("source_url", ""))
+                source_url=g.get("source_url", ""), origin=rule_origin(g, ex), basis="usage_role")
 
     # --- 活用形：例欄已寫成「原形 → 變化形」的列 ---
     # 誘答是把同一則其他列的語尾套錯在這個詞上（静か＋くて），
@@ -904,18 +992,21 @@ def build_questions(vocab, grammar):
             base, inflected = pair
             stem = common_prefix(base, inflected)
             if not stem or stem == inflected:
+                diagnose(diagnostics, "inflection_invalid", "connect", **context(g, ex))
                 continue
             pairs.append((base, inflected, stem, inflected[len(stem):], rule))
         if len(pairs) < 2:
+            if pairs:
+                diagnose(diagnostics, "inflection_pairs_missing", "connect", **context(g))
             continue
-        endings = {surface(e) for _, _, _, e, _ in pairs}
         for base, inflected, stem, ending, rule in pairs:
             wrong = [stem + e for _, _, _, e, _ in pairs if surface(e) != surface(ending)]
             wrong.append(base)                       # 忘了變形，直接接原形
             add("connect", "活用", base + " → " + BLANK, inflected, wrong,
                 g["title"], base + " → " + inflected,
                 ask="選出這個詞接在後句時的正確形式。",
-                note="筆記記載的接續：" + rule, source_url=g.get("source_url", ""))
+                note="筆記記載的接續：" + rule, source_url=g.get("source_url", ""),
+                origin=rule_origin(g, next(ex for r, ex in g["rules"] if r == rule)), basis="inflection_pair")
 
     # --- 活用形：從例句切出動詞挖空（需要斷詞器，沒裝就整段跳過）---
     for g in grammar:
@@ -924,12 +1015,14 @@ def build_questions(vocab, grammar):
                 continue
             hit = conjugation_target(rule, ex)
             if not hit:
+                diagnose(diagnostics, "conjugation_unavailable" if TAGGER else "tokenizer_unavailable", "connect", **context(g, ex, rule))
                 continue
             chunk, dictionary, ctype = hit
             tail = surface(rule).split("＋")[1].strip() if "＋" in rule else ""
             forms = verb_forms(dictionary, ctype)
             blanked = blank_sentence(ex, [chunk]) if forms else None
             if not blanked:
+                diagnose(diagnostics, "blank_unavailable", "connect", **context(g, ex, chunk))
                 continue
             stem, answer = blanked
             # 同一則列出的其他形也是這個文法點接受的接續：【動詞辞書形＋名詞】
@@ -955,7 +1048,8 @@ def build_questions(vocab, grammar):
                 options.append(furigana_prefix(answer, keep) + text[keep:])
             add("connect", "活用", stem, answer, options, g["title"], ex,
                 ask="選出填入［　］的正確形式。",
-                note="筆記記載的接續：" + rule, source_url=g.get("source_url", ""))
+                note="筆記記載的接續：" + rule, source_url=g.get("source_url", ""),
+                origin=rule_origin(g, ex), basis="verb_conjugation")
 
     # 內容修改、刪除由每次全量重建反映；穩定 ID 不依賴日期或抽題順序。
     result, seen, answers = [], set(), {}
@@ -965,64 +1059,131 @@ def build_questions(vocab, grammar):
     for q in qs:
         key = (q["kind"], surface(q["stem"]))
         if key in seen:
+            diagnose(diagnostics, "duplicate", q["kind"], source=q["source"], source_url=q["source_url"], text=q["stem"], target=q["answer"])
             continue
         if len(answers[key]) > 1:
+            diagnose(diagnostics, "answer_conflict", q["kind"], source=q["source"], source_url=q["source_url"], text=q["stem"], target=q["answer"])
             continue
         seen.add(key)
         q["id"] = hashlib.sha256(("|".join(key) + "|" + surface(q["answer"])).encode("utf-8")).hexdigest()[:16]
+        q["revision"] = revision(q)
         result.append(q)
     return result
 
 
 # --------------------------------------------------------------------------
-def main():
-    missing = [k for k, v in [("NOTION_TOKEN", TOKEN),
-                              ("ARTICLES_PAGE_ID", ARTICLES_ID),
-                              ("GRAMMAR_PAGE_ID", GRAMMAR_ID)] if not v]
-    if missing:
-        raise SystemExit("缺少環境變數：" + ", ".join(missing))
-
-    print("讀取日文文法…", file=sys.stderr)
-    grammar = collect_grammar(GRAMMAR_ID)
-    print("  取得 %d 則文法" % len(grammar), file=sys.stderr)
-
-    print("讀取日文文章…", file=sys.stderr)
-    vocab = collect_vocab(ARTICLES_ID, skip_ids=[GRAMMAR_ID])
-    print("  取得 %d 個標記詞" % len(vocab), file=sys.stderr)
-
-    questions = build_questions(vocab, grammar)
-    print("產生 %d 題" % len(questions), file=sys.stderr)
-
-    if not questions:
-        raise SystemExit("沒有可用題目；請確認 Notion 分享權限、筆記格式及同類選項數量。未覆寫現有題庫。")
-
-    payload = {
-        "schema_version": 2,
-        "generated_at": time.strftime("%Y-%m-%d %H:%M", time.gmtime(time.time() + 8 * 3600)),
-        "stats": {
-            "grammar_points": len(grammar),
-            "marked_terms": len(vocab),
-            "questions": len(questions),
-            "by_kind": {kind: sum(q["kind"] == kind for q in questions)
-                        for kind in ("vocab", "grammar", "connect")},
-        },
-        "questions": questions,
-    }
-
-    os.makedirs(os.path.dirname(os.path.abspath(OUT)), exist_ok=True)
+def write_bank(path, payload):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     # 讀取或產生失敗不覆蓋舊檔；完整寫入後才替換，避免讀到半份 JSON。
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=os.path.dirname(OUT),
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=os.path.dirname(os.path.abspath(path)),
                                          suffix=".tmp", delete=False) as f:
             temporary = f.name
             json.dump(payload, f, ensure_ascii=False, indent=1)
-        os.replace(temporary, OUT)
+        os.replace(temporary, path)
     finally:
         if temporary and os.path.exists(temporary):
             os.unlink(temporary)
-    print("已寫入 %s" % OUT, file=sys.stderr)
+
+
+def main(argv=()):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", default=OUT, help="題庫輸出位置")
+    parser.add_argument("--previous", help="比較基準；本機預設讀取原有輸出檔")
+    parser.add_argument("--baseline-info", help="CI 取回基準的狀態 JSON")
+    parser.add_argument("--report-dir", default=".build/review", help="診斷、差異報告及解析素材目錄")
+    parser.add_argument("--from-snapshot", help="離線重播先前的 materials.json，不呼叫 Notion")
+    parser.add_argument("--ai-review", action="store_true", help="啟用有預算限制的 OpenAI 語意審題")
+    parser.add_argument("--ai-state", default=".build/ai-state/cache.json", help="AI 審題快取及用量紀錄")
+    parser.add_argument("--ai-run-budget", type=float, default=1.0, help="單次審題預算，美元")
+    parser.add_argument("--ai-month-budget", type=float, default=5.0, help="本流程每月審題預算，美元（UTC）")
+    args = parser.parse_args(argv)
+    diagnostics = Diagnostics()
+    previous, grammar, vocab = None, [], []
+    reviewer = None
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write("ready=false\n")
+    baseline = {"status": "missing", "description": "首次執行或尚未保存比較基準"}
+    payload = {"schema_version": 2,
+               "generated_at": time.strftime("%Y-%m-%d %H:%M", time.gmtime(time.time() + 8 * 3600)),
+               "stats": {"grammar_points": 0, "marked_terms": 0, "questions": 0, "by_kind": {}},
+               "questions": []}
+    try:
+        if args.baseline_info:
+            baseline = json.loads(Path(args.baseline_info).read_text(encoding="utf-8"))
+        previous = read_bank(args.previous or args.output)
+        if previous is not None:
+            baseline.update(status="available", description=baseline.get("description") if args.baseline_info else
+                            "本機上次成功生成的題庫：" + previous.get("generated_at", "時間未知"))
+        elif baseline.get("status") == "available":
+            raise ValueError("上次成功部署的基準檔案遺失，停止生成以免錯誤比較")
+
+        if args.from_snapshot:
+            snapshot = json.loads(Path(args.from_snapshot).read_text(encoding="utf-8"))
+            if snapshot.get("snapshot_version") != 1:
+                raise ValueError("不支援的解析素材版本")
+            vocab, grammar = snapshot["vocab"], snapshot["grammar"]
+            diagnostics.events.extend(snapshot.get("parse_events", []))
+        else:
+            missing = [k for k, v in [("NOTION_TOKEN", TOKEN), ("ARTICLES_PAGE_ID", ARTICLES_ID),
+                                      ("GRAMMAR_PAGE_ID", GRAMMAR_ID)] if not v]
+            if missing:
+                raise ValueError("缺少環境變數：" + ", ".join(missing))
+            print("讀取日文文法…", file=sys.stderr)
+            grammar = collect_grammar(GRAMMAR_ID, diagnostics=diagnostics)
+            print("  取得 %d 則文法" % len(grammar), file=sys.stderr)
+            print("讀取日文文章…", file=sys.stderr)
+            vocab = collect_vocab(ARTICLES_ID, skip_ids=[GRAMMAR_ID], diagnostics=diagnostics)
+            print("  取得 %d 個標記詞" % len(vocab), file=sys.stderr)
+        payload["stats"].update(grammar_points=len(grammar), marked_terms=len(vocab))
+        write_bank(Path(args.report_dir) / "materials.json", {"snapshot_version": 1, "vocab": vocab,
+                   "grammar": grammar, "parse_events": list(diagnostics.events)})
+        questions = build_questions(vocab, grammar, diagnostics)
+        payload["stats"]["candidates"] = len(questions)
+        if args.ai_review:
+            if not os.environ.get("OPENAI_API_KEY", "").strip():
+                raise ValueError("AI 審題未設定 OPENAI_API_KEY；請設定 GitHub Actions secret")
+            reviewer = Reviewer(args.ai_state, args.ai_run_budget, args.ai_month_budget)
+            # 先用既有多解案例與正常題校驗；快取有效時不重複付費。
+            if not reviewer.calibrate():
+                reviewer.run_budget = 0  # 尚未校驗完成，只記錄待審，不發新請求。
+            questions = reviewer.filter_questions(questions, diagnostics)
+            for q in questions:
+                q["revision"] = revision(q)
+        payload["questions"] = questions
+        payload["stats"].update(questions=len(questions), by_kind={
+            kind: sum(q["kind"] == kind for q in questions) for kind in ("vocab", "grammar", "connect")})
+        print("產生 %d 題" % len(questions), file=sys.stderr)
+        if reviewer and not reviewer.stats["error"] and (reviewer.stats["pending"]
+                or reviewer.stats["calibration_passed"] < reviewer.stats["calibration_total"]):
+            report = make_report(previous, payload, diagnostics, grammar, baseline, status="pending")
+            # 尚未審完，不能把未發布的部分誤報為刪除。
+            report["diff"] = {"available": False, "added": [], "removed": [], "changed": [], "unchanged": 0}
+            report["ai"] = reviewer.stats
+            write_report(args.report_dir, report)
+            print("AI 校驗／審題未完成，尚有 %d 題待處理；已保存進度，保留原題庫，下次續審。" % reviewer.stats["pending"], file=sys.stderr)
+            return
+        if reviewer and reviewer.stats["error"]:
+            raise ValueError(reviewer.stats["error"])
+        if not questions:
+            raise ValueError("沒有可用題目；請確認 Notion 分享權限、筆記格式及同類選項數量")
+        report = make_report(previous, payload, diagnostics, grammar, baseline)
+        report["ai"] = reviewer.stats if reviewer else {"enabled": False}
+        write_report(args.report_dir, report)
+        write_bank(args.output, payload)
+    except (Exception, SystemExit) as error:
+        # 讀取失敗不把未完成題库誤報為全部刪除；仍輸出已收集的診斷。
+        report = make_report(None, payload, diagnostics, grammar, baseline, status="failed", error=str(error))
+        report["ai"] = reviewer.stats if reviewer else {"enabled": args.ai_review}
+        write_report(args.report_dir, report)
+        raise SystemExit(str(error) + "。未覆寫現有題庫。") from error
+    print("已寫入 %s；報告：%s" % (args.output, args.report_dir), file=sys.stderr)
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write("ready=true\n")
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

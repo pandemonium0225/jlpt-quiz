@@ -10,16 +10,22 @@ on:
 
 permissions:
   contents: read
+  actions: read
   pages: write
   id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  # 審題可能已計費，不中途取消；讓已完成的審核和用量紀錄能上傳。
+  cancel-in-progress: false
 
 jobs:
   build:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.generate.outputs.ready }}
+      candidate_name: quiz-candidate-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,25 +47,109 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Test quiz selection and rendering helpers
-        run: node --test tests/test_ui.cjs
+        run: node --test tests/*.cjs
+
+      - name: Prepare review directories
+        run: mkdir -p .build/baseline .build/ai-state
+
+      - name: Find published baseline and latest AI progress
+        id: state
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const findState = require('./scripts/find_workflow_state.cjs');
+            await findState({github, context, core});
+
+      - name: Download published baseline
+        if: steps.state.outputs.baseline_run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.state.outputs.baseline_artifact }}
+          run-id: ${{ steps.state.outputs.baseline_run }}
+          github-token: ${{ github.token }}
+          path: .build/baseline
+
+      - name: Download AI progress including unfinished reviews
+        if: steps.state.outputs.ai_run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.state.outputs.ai_artifact }}
+          run-id: ${{ steps.state.outputs.ai_run }}
+          github-token: ${{ github.token }}
+          path: .build/ai-state
 
       - name: Generate quiz bank from Notion
+        id: generate
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           ARTICLES_PAGE_ID: ${{ vars.ARTICLES_PAGE_ID }}
           GRAMMAR_PAGE_ID: ${{ vars.GRAMMAR_PAGE_ID }}
-        run: python scripts/build_quiz.py
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: >-
+          python scripts/build_quiz.py
+          --previous .build/baseline/quiz.json
+          --baseline-info .build/baseline-info.json
+          --ai-review
+
+      - name: Write review summary
+        if: always()
+        run: |
+          if [ -f .build/review/report.md ]; then
+            cat .build/review/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Save review report and replay materials
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quiz-review-${{ github.run_attempt }}
+          path: .build/review/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Save AI decisions and usage even when publication is blocked
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quiz-ai-state-${{ github.run_attempt }}
+          path: .build/ai-state/cache.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Save reviewed candidate for deployment
+        if: steps.generate.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: quiz-candidate-${{ github.run_attempt }}
+          path: site/quiz.json
+          if-no-files-found: error
+          retention-days: 7
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.generate.outputs.ready == 'true'
         with:
           path: site
 
   deploy:
     needs: build
+    if: needs.build.outputs.ready == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.candidate_name }}
+          path: baseline
       - id: deployment
         uses: actions/deploy-pages@v4
+      # 僅在 Pages 部署成功後留下可供下次比較的基準。
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quiz-baseline-${{ github.run_attempt }}
+          path: baseline/quiz.json
+          if-no-files-found: error
+          retention-days: 90
