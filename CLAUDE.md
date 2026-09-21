@@ -70,7 +70,7 @@ parser 已對照實際 Notion 結構修正過；之後改規則前，先看下�
 使用者要求每次更新自動檢查，並希望由 AI 判斷日文語意，同時控制費用。此段及 README 優先於下方「無 AI／零付費 API」舊記錄。
 
 - `scripts/quiz_report.py` 保存未出題原因、來源、文法覆蓋及題庫差異；`materials.json` 可離線重播。
-- `scripts/ai_review.py` 使用 OpenAI Responses API，預設 `gpt-5.6-terra`、medium reasoning。使用者要求測試階段先停用 US$1 單次上限；Actions 加 `--ai-no-run-limit`，UTC 每月 US$5 及平台硬上限保留。移除此參數可恢復單次 US$1，本機預設仍為 US$1。
+- `scripts/ai_review.py` 使用 OpenAI Responses API，預設 `gpt-5.6-sol`、medium reasoning。Terra 線上校驗有基礎接續誤判及判定／理由矛盾，改用 Sol，並同步價格表為輸入 US$4/M、輸出 US$20/M。使用者要求測試階段先停用 US$1 單次上限；Actions 加 `--ai-no-run-limit`，UTC 每月 US$5 及平台硬上限保留。移除此參數可恢復單次 US$1，本機預設仍為 US$1。
 - AI 逐一判斷整個選項池，保留明確錯誤的誘答；正解不成立、題意不清或不足三個可靠誘答就排除。原句、答案不改寫。
 - AI 盲審只傳作答時可見的內容；不傳入原句、翻譯、解說或標準答案身分。第二次線上校驗把過去式的合理解讀排除後，改為先找可成立解讀、要求排除理由有可見依據，校驗期望值不變。
 - 六個已知日文案例先校驗模型；同時檢查合理多解與錯誤接續，尚未全部通過不得發布。結果以模型／提示／內容雜湊快取；包含被排除的結果，避免重複計費。
