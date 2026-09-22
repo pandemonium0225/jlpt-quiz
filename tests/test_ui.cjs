@@ -4,8 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const html = fs.readFileSync(path.join(__dirname, '../site/index.html'), 'utf8');
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const script = fs.readFileSync(path.join(__dirname, '../site/app.js'), 'utf8');
 const elements = new Map();
 const context = vm.createContext({
   document: {

@@ -28,6 +28,8 @@
 ```
 scripts/build_quiz.py
 site/index.html
+site/style.css
+site/app.js
 .github/workflows/deploy.yml
 README.md
 ```
@@ -165,5 +167,5 @@ node --test tests/*.cjs
 - **Actions 紅字 `Notion API 404`**：頁面沒分享給 integration，回第二步
 - **頁面顯示「題庫是空的」**：同上，或是 page ID 填錯
 - **Actions 綠燈但網站是舊的**：先看 Summary 是否為 `pending`、deploy 是否略過；若是則等下次續審。已成功部署才嘗試強制重新整理（Ctrl/Cmd + Shift + R）。
-- **想改每輪題數**：編輯 `site/index.html` 最上方的 `PER_ROUND`
+- **想改每輪題數**：編輯 `site/app.js` 最上方的 `PER_ROUND`
 - **想改更新頻率**：編輯 `.github/workflows/deploy.yml` 的 `cron`（時間是 UTC，台灣時間要減 8 小時）
