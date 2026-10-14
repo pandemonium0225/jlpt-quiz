@@ -854,6 +854,8 @@ def build_questions(vocab, grammar, diagnostics=None):
         qs.append({
             "kind": kind, "label": label, "instruction": ask or instruction,
             "stem": stem, "hint": "", "answer": answer, "pool": pool[:8],
+            # 截斷前的完整候選；只供 AI 審題判斷舊誘答是否仍在筆記，不寫入題庫。
+            "pool_candidates": pool,
             "source": source, "source_url": source_url,
             "original": original, "translation": translation, "note": note,
             "punctuation_restored": bool(source_text), "source_text": source_text,
@@ -1161,6 +1163,8 @@ def main(argv=()):
             questions = reviewer.filter_questions(questions, diagnostics)
             for q in questions:
                 q["revision"] = revision(q)
+        for q in questions:
+            q.pop("pool_candidates", None)
         payload["questions"] = questions
         payload["stats"].update(questions=len(questions), by_kind={
             kind: sum(q["kind"] == kind for q in questions) for kind in ("vocab", "grammar", "connect")})

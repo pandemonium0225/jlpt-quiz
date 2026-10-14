@@ -58,6 +58,56 @@ class ReviewTests(unittest.TestCase):
         with patch.object(a, "PROMPT", a.PROMPT + " 新規則"):
             self.assertNotEqual(a.cache_key(q), before)
 
+    def test_reviewed_pool_is_kept_when_new_terms_enter_the_ranking(self):
+        q = dict(question(), pool_candidates=["から", "に", "が", "と"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cache.json"
+            first = a.Reviewer(path, transport=lambda _: response(verdict(q, valid={"を", "から"})))
+            first.filter_questions([q], Diagnostics())
+            # 新標記詞「へ」排進前面、把「と」擠出截斷範圍；舊的四個誘答都還在候選裡。
+            crowded = dict(q, pool=["へ", "から", "に", "が"], pool_candidates=["へ", "から", "に", "が", "と"])
+            replay = a.Reviewer(path, transport=lambda _: self.fail("只是誘答排序變動，不得重新付費"))
+            output = replay.filter_questions([crowded], Diagnostics())
+            self.assertEqual(output[0]["pool"], ["に", "が", "と"])
+            self.assertEqual((replay.stats["calls"], replay.stats["cache_hits"], replay.stats["reused_pools"]), (0, 1, 1))
+            self.assertEqual(crowded["pool"], ["へ", "から", "に", "が"])
+
+    def test_reviewed_pool_is_dropped_when_an_old_option_left_the_notes(self):
+        q = dict(question(), pool_candidates=["から", "に", "が", "と"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cache.json"
+            a.Reviewer(path, transport=lambda _: response(verdict(q))).filter_questions([q], Diagnostics())
+            # 「と」已從筆記移除：舊的一組不能再用，新的一組必須送審並成為下次沿用的對象。
+            changed = dict(q, pool=["から", "に", "が", "へ"], pool_candidates=["から", "に", "が", "へ"])
+            calls = []
+            def transport(body):
+                calls.append(json.loads(body["input"][1]["content"])["options"])
+                return response(verdict(changed))
+            replay = a.Reviewer(path, transport=transport)
+            output = replay.filter_questions([changed], Diagnostics())
+            self.assertEqual(calls, [sorted(["を", "から", "に", "が", "へ"])])
+            self.assertEqual(replay.stats["reused_pools"], 0)
+            self.assertNotIn("と", output[0]["pool"])
+            again = a.Reviewer(path, transport=lambda _: self.fail("新的一組已審過"))
+            again.filter_questions([dict(changed, pool=["と", "から", "に", "が"],
+                                         pool_candidates=["と", "から", "に", "が", "へ"])], Diagnostics())
+            self.assertEqual(again.stats["reused_pools"], 1)
+
+    def test_state_without_pool_records_is_filled_from_cache_hits(self):
+        q = question()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cache.json"
+            a.Reviewer(path, transport=lambda _: response(verdict(q))).filter_questions([q], Diagnostics())
+            state = json.loads(path.read_text())
+            del state["pools"]  # 這項功能上線前留下的狀態檔
+            path.write_text(json.dumps(state))
+            a.Reviewer(path, transport=lambda _: self.fail("快取仍有效")).filter_questions([q], Diagnostics())
+            self.assertEqual(list(json.loads(path.read_text())["pools"].values()), [q["pool"]])
+            state["pools"] = {"x": "を"}
+            path.write_text(json.dumps(state))
+            with self.assertRaisesRegex(ValueError, "快取損壞"):
+                a.Reviewer(path)
+
     def test_uncertain_options_and_wrong_answers_cannot_pass(self):
         q = question()
         q["pool"] = ["から", "に", "が"]
@@ -325,7 +375,7 @@ class ReviewTests(unittest.TestCase):
             root = Path(directory)
             snapshot, out = root / "materials.json", root / "quiz.json"
             snapshot.write_text(json.dumps({"snapshot_version": 1, "grammar": [], "vocab": []}))
-            q = dict(question(), id="id", revision="old")
+            q = dict(question(), id="id", revision="old", pool_candidates=question()["pool"] + ["へ"])
             reviewer = a.Reviewer(root / "cache.json", run_budget=None, initial_month_budget=10,
                                   transport=lambda _: response(verdict(q, valid={"を", "から"})))
             reviewer.stats["calibration_passed"] = len(a.calibration_cases())
@@ -342,6 +392,7 @@ class ReviewTests(unittest.TestCase):
             published = json.loads(out.read_text())["questions"][0]
             self.assertNotIn("から", published["pool"])
             self.assertNotEqual(published["revision"], "old")
+            self.assertNotIn("pool_candidates", published)
             self.assertEqual(published["ai_review"]["model"], a.MODEL)
 
     def test_unfinished_calibration_blocks_even_cached_candidates(self):

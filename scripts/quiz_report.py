@@ -175,7 +175,8 @@ def render_markdown(report, limit=30):
         run_limit = ("單次不限額" if ai["run_budget_usd"] is None
                      else "上限 US$%.2f" % ai["run_budget_usd"])
         lines += ["### AI 語意審核", "",
-                  f"模型 {safe_text(ai['model'])}；呼叫 {ai['calls']} 次，沿用快取 {ai['cache_hits']} 題。",
+                  f"模型 {safe_text(ai['model'])}；呼叫 {ai['calls']} 次，沿用快取 {ai['cache_hits']} 題"
+                  f"（其中 {ai.get('reused_pools', 0)} 題沿用已審過的誘答池）。",
                   f"已知案例校驗 {ai['calibration_passed']} / {ai['calibration_total']}；未全數通過不發布。",
                   f"通過 {ai['accepted']}、排除 {ai['rejected']}、待審 {ai['pending']}；移除歧義誘答 {ai['trimmed_options']} 個。",
                   f"本次估計 US${ai['run_usd']:.4f}（{run_limit}）；本月 UTC 累計 US${ai['month_usd']:.4f} / {ai['month_budget_usd']:.2f}。",

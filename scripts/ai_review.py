@@ -100,6 +100,11 @@ def cache_key(question):
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
+def pool_key(question):
+    # 同一題（題幹、指示、正解與審題政策皆相同）的識別，不含誘答；用來找回上次審過的誘答池。
+    return cache_key(dict(question, pool=[]))
+
+
 def validate_verdict(verdict, question):
     if (not isinstance(verdict, dict) or type(verdict.get("question_clear")) is not bool
             or not isinstance(verdict.get("explanation"), str)
@@ -170,6 +175,11 @@ class Reviewer:
             "state_version": 1, "cache": {}, "months": {}}
         if self.state.get("state_version") != 1 or not isinstance(self.state.get("cache"), dict) or not isinstance(self.state.get("months"), dict):
             raise ValueError("AI 審核快取損壞；停止呼叫以免重複花費")
+        # 舊版狀態沒有這一欄；首次執行由快取命中的題目補上。
+        pools = self.state.setdefault("pools", {})
+        if not isinstance(pools, dict) or any(not isinstance(pool, list) or not all(isinstance(p, str) for p in pool)
+                                              for pool in pools.values()):
+            raise ValueError("AI 審核快取損壞；停止呼叫以免重複花費")
         if any(not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 for v in self.state["months"].values()):
             raise ValueError("AI 用量紀錄無效")
         completed_at = self.state.get("initial_review_completed_at")
@@ -182,7 +192,7 @@ class Reviewer:
         self.transport = transport
         self.stats = {"enabled": True, "model": MODEL, "calls": 0, "cache_hits": 0,
                       "calibration_passed": 0, "calibration_total": len(calibration_cases()),
-                      "accepted": 0, "rejected": 0, "pending": 0, "trimmed_options": 0,
+                      "accepted": 0, "rejected": 0, "pending": 0, "trimmed_options": 0, "reused_pools": 0,
                       "run_usd": 0.0, "run_budget_usd": run_budget, "month_budget_usd": self.month_budget,
                       "next_month_budget_usd": self.month_budget, "initial_review_completed": bool(completed_at),
                       "month_usd": self.state["months"].get(self.month, 0.0), "error": ""}
@@ -213,6 +223,16 @@ class Reviewer:
                 raise ValueError("AI 未通過已知案例「%s」；停止發布，需檢查模型判斷或審題提示" % name)
             self.stats["calibration_passed"] += 1
         return True
+
+    def _with_reviewed_pool(self, question):
+        """新標記詞擠進誘答排序時，舊題沿用已審過的那一組，不整題重新付費。"""
+        pool = self.state["pools"].get(pool_key(question))
+        # 舊誘答已不在筆記（刪除、改字或被生成規則排除）就不沿用，改審新的一組。
+        available = set(question.get("pool_candidates", question["pool"]))
+        if not pool or set(pool) == set(question["pool"]) or not set(pool) <= available:
+            return question
+        self.stats["reused_pools"] += 1
+        return dict(question, pool=list(pool))
 
     def review(self, question):
         verdict, request = self._prepare_review(question)
@@ -282,6 +302,7 @@ class Reviewer:
         accepted = {}
         groups = {}
         for index, question in enumerate(questions):
+            question = self._with_reviewed_pool(question)
             groups.setdefault(cache_key(question), []).append((index, question))
         stopped = False
         completed = 0
@@ -321,6 +342,8 @@ class Reviewer:
                 # 同一可見題目即使來自不同來源，也只付費一次。
                 self.stats["cache_hits"] += len(groups[key]) - 1
             for index, question in groups[key]:
+                if verdict is not None:
+                    self.state["pools"][pool_key(question)] = list(question["pool"])
                 record_question(index, question, verdict)
                 completed += 1
             if completed // 10 > last_logged // 10:
