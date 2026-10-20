@@ -110,6 +110,14 @@ class BatchReviewer(legacy.Reviewer):
         legacy.save_state(self.path, self.state)
         self._batch_stats()
 
+    def stage_snapshot(self, snapshot):
+        self.state["candidate_snapshot"] = snapshot
+        self._save()
+
+    def finish_snapshot(self):
+        self.state.pop("candidate_snapshot", None)
+        self._save()
+
     def _batch_stats(self):
         job = self.state.get("batch")
         if job:

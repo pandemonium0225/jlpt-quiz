@@ -294,9 +294,14 @@ class BatchTests(unittest.TestCase):
         self.api.finish()
         self.assertEqual(run()["status"], "pending")
         self.assertEqual(len(self.api.uploads[1]), 1)
+        # 筆記每天新增題目時，已完成批次仍須發布，不能被下一批的新題拖住。
+        q["stem"] = "新筆記的新題目"
         self.api.finish()
         self.assertEqual(run()["status"], "success")
         self.assertIn("ready=true", output.read_text())
-        self.assertEqual(json.loads(out.read_text())["questions"][0]["ai_review"]["model"], b.MODEL)
+        published = json.loads(out.read_text())["questions"][0]
+        self.assertEqual(published["ai_review"]["model"], b.MODEL)
+        self.assertNotEqual(published["stem"], q["stem"])
+        self.assertNotIn("candidate_snapshot", json.loads(self.path.read_text()))
         self.assertEqual(len(self.api.creates), 2)
         self.assertIn("Batch 狀態", (root / "report/report.md").read_text())
