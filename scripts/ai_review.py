@@ -158,6 +158,8 @@ def call_openai(body):
 
 
 class Reviewer:
+    deferred = False
+
     def __init__(self, state_path, run_budget=1.0, month_budget=5.0, transport=call_openai, workers=3,
                  initial_month_budget=None):
         budgets = (month_budget,) if run_budget is None else (run_budget, month_budget)
@@ -239,6 +241,12 @@ class Reviewer:
         if request is None:
             return verdict
         return self._finish_review(question, request, self.transport(request["body"]))
+
+    def review_metadata(self, question):
+        return {"model": MODEL, "policy": POLICY_VERSION}
+
+    def flush(self):
+        """即時模式沒有待提交的批次。"""
 
     def _prepare_review(self, question, allow_request=True):
         """僅由主執行緒讀寫帳本；先存下所有在途請求的費用預留。"""
@@ -328,7 +336,7 @@ class Reviewer:
                 self.stats["rejected"] += 1
                 diagnostics.record("ai_rejected", question["kind"], details=verdict["explanation"] + "；" + reasons, **context)
                 return
-            q = dict(question, pool=pool, ai_review={"model": MODEL, "policy": POLICY_VERSION})
+            q = dict(question, pool=pool, ai_review=self.review_metadata(question))
             removed = len(question["pool"]) - len(pool)
             if removed:
                 self.stats["trimmed_options"] += removed
@@ -374,7 +382,7 @@ class Reviewer:
                         # 在途請求尚未結算，先等預留額釋放，不能過早把後續題目列為待審。
                         break
                     else:
-                        stopped = True
+                        stopped = stopped or not self.deferred
                         record_group(key, None)
                     cursor += 1
                 if active:

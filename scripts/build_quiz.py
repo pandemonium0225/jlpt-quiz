@@ -32,9 +32,11 @@ import urllib.request
 if __package__:
     from .quiz_report import Diagnostics, diagnose, make_report, read_bank, revision, write_report
     from .ai_review import Reviewer
+    from .batch_review import BatchReviewer
 else:
     from quiz_report import Diagnostics, diagnose, make_report, read_bank, revision, write_report
     from ai_review import Reviewer
+    from batch_review import BatchReviewer
 
 API = "https://api.notion.com/v1"
 VERSION = "2022-06-28"
@@ -1097,6 +1099,8 @@ def main(argv=()):
     parser.add_argument("--report-dir", default=".build/review", help="診斷、差異報告及解析素材目錄")
     parser.add_argument("--from-snapshot", help="離線重播先前的 materials.json，不呼叫 Notion")
     parser.add_argument("--ai-review", action="store_true", help="啟用有預算限制的 OpenAI 語意審題")
+    parser.add_argument("--ai-mode", choices=("batch", "realtime"), default="batch",
+                        help="預設 Luna Batch；realtime 為舊版 Sol 即時模式，不自動切換")
     parser.add_argument("--ai-state", default=".build/ai-state/cache.json", help="AI 審題快取及用量紀錄")
     run_budget = parser.add_mutually_exclusive_group()
     run_budget.add_argument("--ai-run-budget", type=float, help="單次審題預算，美元（預設 1）")
@@ -1153,14 +1157,16 @@ def main(argv=()):
         if args.ai_review:
             if not os.environ.get("OPENAI_API_KEY", "").strip():
                 raise ValueError("AI 審題未設定 OPENAI_API_KEY；請設定 GitHub Actions secret")
-            reviewer = Reviewer(args.ai_state, args.ai_run_budget, args.ai_month_budget,
-                                initial_month_budget=args.ai_initial_month_budget)
+            reviewer_class = BatchReviewer if args.ai_mode == "batch" else Reviewer
+            reviewer = reviewer_class(args.ai_state, args.ai_run_budget, args.ai_month_budget,
+                                      initial_month_budget=args.ai_initial_month_budget)
             # 先用既有多解案例與正常題校驗；快取有效時不重複付費。
             if not reviewer.calibrate():
                 reviewer.run_budget = 0  # 尚未校驗完成，只記錄待審，不發新請求。
             print("AI 校驗 %d/%d；候選 %d 題" % (reviewer.stats["calibration_passed"],
                   reviewer.stats["calibration_total"], len(questions)), file=sys.stderr, flush=True)
             questions = reviewer.filter_questions(questions, diagnostics)
+            reviewer.flush()
             for q in questions:
                 q["revision"] = revision(q)
         for q in questions:

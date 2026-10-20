@@ -179,8 +179,18 @@ def render_markdown(report, limit=30):
                   f"（其中 {ai.get('reused_pools', 0)} 題沿用已審過的誘答池）。",
                   f"已知案例校驗 {ai['calibration_passed']} / {ai['calibration_total']}；未全數通過不發布。",
                   f"通過 {ai['accepted']}、排除 {ai['rejected']}、待審 {ai['pending']}；移除歧義誘答 {ai['trimmed_options']} 個。",
-                  f"本次估計 US${ai['run_usd']:.4f}（{run_limit}）；本月 UTC 累計 US${ai['month_usd']:.4f} / {ai['month_budget_usd']:.2f}。",
+                  (f"本次新增預留 US${ai.get('reserved_usd', 0):.4f}，收回結果結算 US${ai.get('settled_usd', 0):.4f}（{run_limit}）；"
+                   if ai.get("mode") == "batch" else f"本次估計 US${ai['run_usd']:.4f}（{run_limit}）；")
+                  + f"本月 UTC 累計 US${ai['month_usd']:.4f} / {ai['month_budget_usd']:.2f}。",
                   "金額按程式內價格表估算，失敗請求保守預留；實際帳單以 API 服務為準。", ""]
+        if ai.get("mode") == "batch":
+            lines += [
+                f"Batch 狀態：{safe_text(ai.get('batch_status', 'idle'))}；"
+                f"本次提交 {ai.get('submitted', 0)} 題、收回 {ai.get('collected', 0)} 題；"
+                f"沿用 Sol 舊判定 {ai.get('legacy_cache_hits', 0)} 題。",
+                f"批次 ID：{safe_text(ai.get('batch_id') or '無')}。",
+                "預留不是實際扣款；收回結果按原提交月份結算，含輸入快取折扣。"
+                "等待中的批次不重送，下一次排程或手動更新會查詢結果；完成前保留原網站。", ""]
         if ai.get("next_month_budget_usd", ai["month_budget_usd"]) != ai["month_budget_usd"]:
             lines += [f"首輪已完成；後續執行自動恢復月額 US${ai['next_month_budget_usd']:.2f}，累計用量不歸零。",
                       "若本月已超過恢復後的額度，仍可沿用快取，新增付費審查等下個 UTC 月續跑。", ""]

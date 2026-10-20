@@ -94,6 +94,7 @@ jobs:
             --previous .build/baseline/quiz.json \
             --baseline-info .build/baseline-info.json \
             --ai-review \
+            --ai-mode batch \
             --ai-no-run-limit \
             --ai-month-budget "$month_budget"
 

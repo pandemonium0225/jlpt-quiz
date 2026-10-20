@@ -382,7 +382,7 @@ class ReviewTests(unittest.TestCase):
             with patch.object(b, "build_questions", return_value=[q]), patch.object(b, "Reviewer", return_value=reviewer) as factory, \
                  patch.object(reviewer, "calibrate", return_value=True), patch.dict(b.os.environ, {"OPENAI_API_KEY": "test"}):
                 b.main(["--from-snapshot", str(snapshot), "--output", str(out), "--report-dir", str(root / "report"),
-                        "--ai-review", "--ai-no-run-limit", "--ai-initial-month-budget", "10"])
+                        "--ai-review", "--ai-mode", "realtime", "--ai-no-run-limit", "--ai-initial-month-budget", "10"])
             self.assertIsNone(factory.call_args.args[1])
             self.assertEqual(factory.call_args.args[2], 5.0)
             self.assertEqual(factory.call_args.kwargs["initial_month_budget"], 10)
@@ -405,7 +405,7 @@ class ReviewTests(unittest.TestCase):
             reviewer.review(q)
             with patch.object(b, "build_questions", return_value=[q]), patch.object(b, "Reviewer", return_value=reviewer), \
                  patch.object(reviewer, "calibrate", return_value=False), patch.dict(b.os.environ, {"OPENAI_API_KEY": "test", "GITHUB_OUTPUT": str(output)}):
-                b.main(["--from-snapshot", str(snapshot), "--output", str(out), "--report-dir", str(root / "report"), "--ai-review"])
+                b.main(["--from-snapshot", str(snapshot), "--output", str(out), "--report-dir", str(root / "report"), "--ai-review", "--ai-mode", "realtime"])
             self.assertFalse(out.exists())
             self.assertNotIn("ready=true", output.read_text())
             self.assertNotIn("initial_review_completed_at", reviewer.state)
