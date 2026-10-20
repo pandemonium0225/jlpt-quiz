@@ -14,13 +14,13 @@ else:
     import ai_review as legacy
 
 
-MODEL = "gpt-6-luna"
+MODEL = "gpt-6.1-sol"
 # 2026-10-20 官方 Batch 短上下文價格（USD / 百萬 tokens）。
-# https://developers.openai.com/api/docs/models/gpt-6-luna
-INPUT_PRICE = 0.05
-CACHED_PRICE = 0.005
-WRITE_PRICE = 0.0625
-OUTPUT_PRICE = 0.25
+# https://developers.openai.com/api/docs/models/gpt-6.1-sol
+INPUT_PRICE = 1.0
+CACHED_PRICE = 0.05
+WRITE_PRICE = 1.25
+OUTPUT_PRICE = 5.0
 TERMINAL = {"completed", "failed", "expired", "cancelled"}
 
 
@@ -141,6 +141,13 @@ class BatchReviewer(legacy.Reviewer):
     def review_metadata(self, question):
         cached = self._cached(question)
         return {"model": cached["model"], "policy": cached["policy"]}
+
+    def pending_reason(self):
+        if self.stats["calibration_passed"] != self.stats["calibration_total"]:
+            return "等待 GPT-6.1 Sol Batch 校驗全部通過；保留原題庫"
+        if self.state.get("batch"):
+            return "Batch 待提交或處理中；後續執行接收結果，不重複送審"
+        return super().pending_reason()
 
     def _prepare_review(self, question, allow_request=True):
         cached = self._cached(question, allow_legacy=not self.calibrating)

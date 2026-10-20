@@ -1100,7 +1100,7 @@ def main(argv=()):
     parser.add_argument("--from-snapshot", help="離線重播先前的 materials.json，不呼叫 Notion")
     parser.add_argument("--ai-review", action="store_true", help="啟用有預算限制的 OpenAI 語意審題")
     parser.add_argument("--ai-mode", choices=("batch", "realtime"), default="batch",
-                        help="預設 Luna Batch；realtime 為舊版 Sol 即時模式，不自動切換")
+                        help="預設 GPT-6.1 Sol Batch；realtime 為舊版 Sol 即時模式，不自動切換")
     parser.add_argument("--ai-state", default=".build/ai-state/cache.json", help="AI 審題快取及用量紀錄")
     run_budget = parser.add_mutually_exclusive_group()
     run_budget.add_argument("--ai-run-budget", type=float, help="單次審題預算，美元（預設 1）")

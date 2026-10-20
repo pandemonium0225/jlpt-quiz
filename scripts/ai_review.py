@@ -248,6 +248,9 @@ class Reviewer:
     def flush(self):
         """即時模式沒有待提交的批次。"""
 
+    def pending_reason(self):
+        return "本次或本月預算不足；下次續審"
+
     def _prepare_review(self, question, allow_request=True):
         """僅由主執行緒讀寫帳本；先存下所有在途請求的費用預留。"""
         # 長時間執行可能跨 UTC 月底；各請求按開始月份預留與結算。
@@ -325,7 +328,8 @@ class Reviewer:
                            text=question["stem"], target=question["answer"])
             if verdict is None:
                 self.stats["pending"] += 1
-                diagnostics.record("ai_pending", question["kind"], details=self.stats["error"] or "本次或本月預算不足；下次續審", **context)
+                diagnostics.record("ai_pending", question["kind"],
+                                   details=self.stats["error"] or self.pending_reason(), **context)
                 return
             options = review_input(question)["options"]
             decisions = {options[item["index"]]: item for item in verdict["options"]}
