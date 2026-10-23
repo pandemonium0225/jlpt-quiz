@@ -3,6 +3,8 @@
 從 Notion 的「日文文章」與「日文文法」頁面自動生成日文筆記複習測驗，
 用 GitHub Actions 每天重建、部署到 GitHub Pages。網站維持靜態託管；AI 語意審題使用 OpenAI API，按用量計費。
 
+完整流程與實際範例見：[題庫業務流程與程式碼導讀（18 項流程）](docs/business-flow.md)。
+
 ---
 
 ## 一、建立 Notion integration
